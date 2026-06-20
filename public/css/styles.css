@@ -220,6 +220,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .msg.out .msg-meta { color: rgba(233,237,239,.6); }
 .tick { font-size: 13px; }
 .tick.read { color: #53bdeb; }
+.tick.failed { color: var(--danger); cursor: pointer; }
 .msg-reactions { display: flex; gap: 3px; position: absolute; bottom: -10px;
   right: 6px; background: var(--panel-3); border-radius: 10px; padding: 1px 5px; font-size: 12px; }
 .msg-actions { position: absolute; top: 2px; right: 4px; opacity: 0; display: flex; gap: 2px; }

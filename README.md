@@ -20,7 +20,10 @@ de apagão ou queda do servidor central.
 - **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só sinaliza).
 - **Mensagens de voz** (gravação com MediaRecorder e player no chat).
 - **Encontrar contatos** por nome de usuário, nome de exibição ou e-mail (sem agenda telefônica).
-- **Status de entrega**: ✓ enviada, ✓✓ entregue, ✓✓ azul lida.
+- **Status de entrega**: 🕐 pendente, ✓ enviada, ✓✓ entregue, ✓✓ azul lida, ⚠ falhou (toque para reenviar).
+- **Envio resiliente (outbox offline)** — a mensagem aparece na hora (otimista), é
+  enfileirada localmente e reenviada automaticamente ao reconectar; sem perda em
+  redes móveis instáveis. Reconciliação por `clientId` evita duplicação.
 - **Indicador "digitando…"**.
 - **Presença** online / visto por último.
 - **Envio de mídia** (imagens e arquivos até 25 MB).

@@ -127,14 +127,14 @@ function connectSocket() {
   const socket = io({ auth: { token: getToken() } });
   state.socket = socket;
 
-  socket.on('connect', () => updateNetIndicator());
+  socket.on('connect', () => { updateNetIndicator(); flushOutbox(); });
   socket.on('disconnect', () => updateNetIndicator());
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
   });
 
-  socket.on('message:new', ({ message }) => {
-    addMessage(message);
+  socket.on('message:new', ({ message, clientId }) => {
+    addMessage(message, clientId);
     if (message.chatId === state.activeChatId && message.senderId !== state.me.id) {
       socket.emit('chat:read', { chatId: message.chatId });
     } else if (message.senderId !== state.me.id) {
@@ -260,10 +260,23 @@ async function reloadActiveMessages(silent) {
   renderMessages(silent);
 }
 
-function addMessage(message) {
+function addMessage(message, clientId) {
   if (!state.messages.has(message.chatId)) state.messages.set(message.chatId, []);
   const list = state.messages.get(message.chatId);
-  if (!list.find((m) => m.id === message.id)) list.push(message);
+
+  // Reconcile an optimistic (locally-queued) message with the server's copy.
+  if (clientId) {
+    const opt = list.find((m) => m.clientId === clientId);
+    if (opt) {
+      Object.assign(opt, message, { pending: false, failed: false, clientId });
+      removeFromOutbox(clientId);
+      if (message.chatId === state.activeChatId) renderMessages();
+      renderChatList();
+      return;
+    }
+  }
+  if (list.find((m) => m.id === message.id)) return; // already have it
+  list.push(message);
   if (message.chatId === state.activeChatId) renderMessages();
 }
 
@@ -347,6 +360,11 @@ function renderTyping() {
 // ------------------------------------------------------------------ render: messages
 function tickFor(message, chat) {
   if (message.senderId !== state.me.id || chat.type === 'system') return '';
+  if (message.failed) {
+    return el('span', { class: 'tick failed', title: 'Falha — toque para reenviar',
+      onclick: () => retryMessage(message) }, '⚠');
+  }
+  if (message.pending) return el('span', { class: 'tick', title: 'Enviando…' }, '🕐');
   const others = chat.members.filter((m) => m.id !== state.me.id).map((m) => m.id);
   const readAll = others.length && others.every((id) => message.readBy.includes(id));
   const deliveredAll = others.length && others.every((id) => message.deliveredTo.includes(id));
@@ -452,21 +470,118 @@ function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
 }
 
+// ---- offline outbox: queued sends survive flaky networks and reconnects ----
+function outboxKey() { return `speedvox_outbox_${state.me.id}`; }
+function loadOutbox() {
+  try { return JSON.parse(localStorage.getItem(outboxKey()) || '[]'); } catch { return []; }
+}
+function saveOutbox(items) { localStorage.setItem(outboxKey(), JSON.stringify(items)); }
+function addToOutbox(payload) {
+  const items = loadOutbox();
+  items.push(payload);
+  saveOutbox(items);
+}
+function removeFromOutbox(clientId) {
+  saveOutbox(loadOutbox().filter((p) => p.clientId !== clientId));
+}
+
+function newClientId() {
+  return (crypto.randomUUID ? crypto.randomUUID() : `c${Date.now()}-${Math.random()}`);
+}
+
+// Build the optimistic message shown immediately while delivery is in flight.
+function optimisticMessage(payload) {
+  return {
+    id: `local-${payload.clientId}`,
+    clientId: payload.clientId,
+    chatId: payload.chatId,
+    senderId: state.me.id,
+    type: payload.type || 'text',
+    body: payload.body || null,
+    mediaUrl: payload.mediaUrl || null,
+    mediaName: payload.mediaName || null,
+    mediaMime: payload.mediaMime || null,
+    replyTo: payload.replyTo || null,
+    createdAt: Date.now(),
+    deleted: false,
+    reactions: [],
+    readBy: [],
+    deliveredTo: [],
+    pending: true,
+    failed: false,
+  };
+}
+
+// Try to deliver one queued payload. Updates pending/failed state on the bubble.
+function deliver(payload) {
+  if (!state.socket || !state.socket.connected) {
+    // No server link — flood over the mesh if it is up, otherwise stay queued.
+    if (state.mesh && state.mesh.enabled) {
+      state.mesh.broadcast({ kind: 'message', message: optimisticMessage(payload) });
+    }
+    return;
+  }
+  state.socket.emit('message:send', payload, (res) => {
+    if (res && res.error) markFailed(payload.clientId);
+    else if (res && res.ok) removeFromOutbox(payload.clientId);
+  });
+  // Safety net: if no ack/echo arrives, flag the message as failed so it can be retried.
+  setTimeout(() => {
+    const m = findByClientId(payload.clientId);
+    if (m && m.pending) markFailed(payload.clientId);
+  }, 12000);
+}
+
+function findByClientId(clientId) {
+  for (const list of state.messages.values()) {
+    const m = list.find((x) => x.clientId === clientId);
+    if (m) return m;
+  }
+  return null;
+}
+
+function markFailed(clientId) {
+  const m = findByClientId(clientId);
+  if (m && m.pending) { m.failed = true; m.pending = false; renderMessages(true); }
+}
+
+function retryMessage(message) {
+  const items = loadOutbox();
+  const payload = items.find((p) => p.clientId === message.clientId)
+    || { clientId: message.clientId, chatId: message.chatId, type: message.type, body: message.body,
+         mediaUrl: message.mediaUrl, mediaName: message.mediaName, mediaMime: message.mediaMime,
+         replyTo: message.replyTo };
+  message.failed = false;
+  message.pending = true;
+  renderMessages(true);
+  deliver(payload);
+}
+
+// Re-send everything still queued (called on (re)connect).
+function flushOutbox() {
+  for (const payload of loadOutbox()) deliver(payload);
+}
+
+function queueAndSend(payload) {
+  payload.clientId = newClientId();
+  addToOutbox(payload);
+  addMessage(optimisticMessage(payload));
+  deliver(payload);
+}
+
 function sendMessage() {
   const input = $('#message-input');
   const body = input.value.trim();
   if (!body || !state.activeChatId) return;
   const payload = { chatId: state.activeChatId, body, type: 'text' };
   if (state.replyTo) payload.replyTo = state.replyTo.id;
-  state.socket.emit('message:send', payload);
-  // If the server link is degraded, also flood the message over the mesh.
-  if (state.mesh && state.mesh.enabled) {
-    state.mesh.broadcast({ kind: 'message', message: { ...payload, senderId: state.me.id, createdAt: Date.now() } });
-  }
+  queueAndSend(payload);
   input.value = '';
   input.style.height = 'auto';
   clearReply();
-  state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
+  if (state.socket && state.socket.connected) {
+    state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
+  }
 }
 
 async function sendFile(file) {
@@ -475,7 +590,7 @@ async function sendFile(file) {
     toast('Enviando…');
     const up = await api.upload(file);
     const isImage = (up.mime || '').startsWith('image/');
-    state.socket.emit('message:send', {
+    queueAndSend({
       chatId: state.activeChatId,
       type: isImage ? 'image' : 'file',
       mediaUrl: up.url,
@@ -550,7 +665,7 @@ async function toggleVoiceRecording() {
     const file = new File([blob], `voz-${Date.now()}.webm`, { type: 'audio/webm' });
     try {
       const up = await api.upload(file);
-      state.socket.emit('message:send', {
+      queueAndSend({
         chatId: state.activeChatId,
         type: 'audio',
         mediaUrl: up.url,
