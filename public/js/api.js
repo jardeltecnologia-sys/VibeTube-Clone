@@ -52,6 +52,9 @@ export const api = {
   addMembers: (id, memberIds) => request('POST', `/chats/${id}/members`, { memberIds }),
   removeMember: (id, userId) => request('DELETE', `/chats/${id}/members/${userId}`),
   setMemberRole: (id, userId, role) => request('POST', `/chats/${id}/members/${userId}/role`, { role }),
+  pinChat: (id, pinned) => request('POST', `/chats/${id}/pin`, { pinned }),
+  archiveChat: (id, archived) => request('POST', `/chats/${id}/archive`, { archived }),
+  muteChat: (id, until) => request('POST', `/chats/${id}/mute`, { until }),
 
   async upload(file) {
     const fd = new FormData();

@@ -41,6 +41,9 @@ CREATE TABLE IF NOT EXISTS chat_members (
   role      TEXT NOT NULL DEFAULT 'member',  -- 'admin' | 'member'
   joined_at INTEGER NOT NULL,
   last_read_at INTEGER NOT NULL DEFAULT 0,
+  archived INTEGER NOT NULL DEFAULT 0,
+  pinned INTEGER NOT NULL DEFAULT 0,
+  muted_until INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (chat_id, user_id),
   FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -94,5 +97,8 @@ function ensureColumn(table, column, ddl) {
 ensureColumn('users', 'public_key', 'public_key TEXT');
 ensureColumn('messages', 'encrypted', 'encrypted INTEGER NOT NULL DEFAULT 0');
 ensureColumn('messages', 'forwarded', 'forwarded INTEGER NOT NULL DEFAULT 0');
+ensureColumn('chat_members', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
+ensureColumn('chat_members', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
+ensureColumn('chat_members', 'muted_until', 'muted_until INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

@@ -142,8 +142,21 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .chat-item {
   display: flex; align-items: center; gap: 12px;
   padding: 11px 14px; cursor: pointer; border-bottom: 1px solid var(--divider);
+  position: relative;
 }
 .chat-item:hover { background: var(--panel-2); }
+.chat-item-menu { position: absolute; top: 8px; right: 8px; opacity: 0;
+  width: 26px; height: 26px; border-radius: 50%; color: var(--text-dim); font-size: 16px; }
+.chat-item:hover .chat-item-menu { opacity: 1; }
+.chat-item-menu:hover { background: var(--panel-3); color: var(--text); }
+.badge.muted { background: var(--text-dim); color: var(--panel); }
+.archived-toggle { padding: 12px 16px; color: var(--text-dim); cursor: pointer;
+  font-size: 14px; border-bottom: 1px solid var(--divider); }
+.archived-toggle:hover { background: var(--panel-2); }
+.popup-menu { position: fixed; z-index: 120; background: var(--panel-2);
+  border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5); padding: 6px; min-width: 160px; }
+.popup-item { padding: 10px 14px; border-radius: 6px; cursor: pointer; font-size: 14px; }
+.popup-item:hover { background: var(--panel-3); }
 .chat-item.active { background: var(--panel-3); }
 .avatar {
   width: 49px; height: 49px; border-radius: 50%; flex-shrink: 0;

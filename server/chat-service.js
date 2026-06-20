@@ -102,6 +102,10 @@ function getChatSummary(chatId, userId) {
     lastMessage: serializeMessage(lastRow),
     unread,
     lastReadAt: membership.last_read_at,
+    archived: Boolean(membership.archived),
+    pinned: Boolean(membership.pinned),
+    mutedUntil: membership.muted_until || 0,
+    muted: (membership.muted_until || 0) > Date.now(),
   };
 }
 
@@ -114,6 +118,8 @@ function listChatsForUser(userId) {
     .map((cid) => getChatSummary(cid, userId))
     .filter(Boolean)
     .sort((a, b) => {
+      // Pinned chats float to the top; otherwise most-recent first.
+      if (a.pinned !== b.pinned) return a.pinned ? -1 : 1;
       const at = a.lastMessage ? a.lastMessage.createdAt : 0;
       const bt = b.lastMessage ? b.lastMessage.createdAt : 0;
       return bt - at;

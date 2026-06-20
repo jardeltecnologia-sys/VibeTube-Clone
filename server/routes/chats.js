@@ -166,6 +166,23 @@ router.post('/:id/members/:userId/role', (req, res) => {
   res.json({ chat: getChatSummary(req.params.id, req.user.id) });
 });
 
+// Per-user chat organization: pin, archive, mute. Affects only the caller.
+function setMembershipFlag(req, res, column, value) {
+  if (!isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });
+  db.prepare(`UPDATE chat_members SET ${column} = ? WHERE chat_id = ? AND user_id = ?`)
+    .run(value, req.params.id, req.user.id);
+  // Sync the change across the caller's other devices.
+  bus.pushChatUpdate(req.params.id);
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+}
+
+router.post('/:id/pin', (req, res) => setMembershipFlag(req, res, 'pinned', req.body && req.body.pinned ? 1 : 0));
+router.post('/:id/archive', (req, res) => setMembershipFlag(req, res, 'archived', req.body && req.body.archived ? 1 : 0));
+router.post('/:id/mute', (req, res) => {
+  const until = req.body && Number(req.body.until) ? Number(req.body.until) : 0;
+  return setMembershipFlag(req, res, 'muted_until', until);
+});
+
 // Leave a chat. If the last admin of a group leaves, promote the oldest member.
 router.post('/:id/leave', (req, res) => {
   const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);

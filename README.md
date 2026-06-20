@@ -35,6 +35,8 @@ de apagão ou queda do servidor central.
 - **Envio de mídia** (imagens e arquivos até 25 MB).
 - **Responder, reagir, editar, encaminhar e apagar mensagens** (para todos).
 - **Contadores de não lidas** e ordenação por atividade.
+- **Organização de conversas**: fixar (no topo), arquivar e silenciar — estado
+  individual por usuário.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
 - **Modo mesh** (experimental) — canais WebRTC peer-to-peer entre usuários.
 

@@ -357,43 +357,87 @@ function addMessage(message, clientId) {
 }
 
 // ------------------------------------------------------------------ render: chat list
+let showArchived = false;
+
+function chatItemNode(chat) {
+  const avatar = el('span', { class: 'avatar' });
+  avatarBg(avatar, chat.avatarUrl, chat.title);
+
+  const typingMap = state.typing.get(chat.id);
+  let preview;
+  if (typingMap && typingMap.size) {
+    preview = el('span', { class: 'chat-item-last', style: 'color:var(--accent)' }, 'digitando…');
+  } else {
+    preview = el('span', { class: 'chat-item-last' }, lastMessagePreview(chat.lastMessage));
+  }
+
+  const badge = chat.unread > 0
+    ? el('span', { class: `badge${chat.muted ? ' muted' : ''}` }, String(chat.unread))
+    : '';
+
+  const menuBtn = el('button', { class: 'chat-item-menu', title: 'Opções',
+    onclick: (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, chat); } }, '⋮');
+
+  return el('li', {
+    class: `chat-item${chat.id === state.activeChatId ? ' active' : ''}`,
+    onclick: () => openChat(chat.id),
+  },
+    avatar,
+    el('div', { class: 'chat-item-body' },
+      el('div', { class: 'chat-item-row' },
+        el('span', { class: 'chat-item-name' },
+          chat.pinned ? '📌 ' : '', chat.muted ? '🔇 ' : '', chat.title),
+        el('span', { class: 'chat-item-time' },
+          chat.lastMessage ? fmtTime(chat.lastMessage.createdAt) : '')),
+      el('div', { class: 'chat-item-preview' }, preview, badge)),
+    menuBtn);
+}
+
 function renderChatList() {
   const filter = $('#chat-search').value.trim().toLowerCase();
   const list = $('#chat-list');
   list.innerHTML = '';
-  const chats = [...state.chats.values()].sort((a, b) => {
+  const all = [...state.chats.values()].sort((a, b) => {
+    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
     const at = a.lastMessage ? a.lastMessage.createdAt : 0;
     const bt = b.lastMessage ? b.lastMessage.createdAt : 0;
     return bt - at;
   });
-  for (const chat of chats) {
-    if (filter && !chat.title.toLowerCase().includes(filter)) continue;
-    const avatar = el('span', { class: 'avatar' });
-    avatarBg(avatar, chat.avatarUrl, chat.title);
+  const visible = all.filter((c) => (!filter || c.title.toLowerCase().includes(filter)));
+  const archived = visible.filter((c) => c.archived);
+  const active = visible.filter((c) => !c.archived);
 
-    const typingMap = state.typing.get(chat.id);
-    let preview;
-    if (typingMap && typingMap.size) {
-      preview = el('span', { class: 'chat-item-last', style: 'color:var(--accent)' }, 'digitando…');
-    } else {
-      preview = el('span', { class: 'chat-item-last' }, lastMessagePreview(chat.lastMessage));
-    }
-
-    const item = el('li', {
-      class: `chat-item${chat.id === state.activeChatId ? ' active' : ''}`,
-      onclick: () => openChat(chat.id),
-    },
-      avatar,
-      el('div', { class: 'chat-item-body' },
-        el('div', { class: 'chat-item-row' },
-          el('span', { class: 'chat-item-name' }, chat.title),
-          el('span', { class: 'chat-item-time' },
-            chat.lastMessage ? fmtTime(chat.lastMessage.createdAt) : '')),
-        el('div', { class: 'chat-item-preview' },
-          preview,
-          chat.unread > 0 ? el('span', { class: 'badge' }, String(chat.unread)) : '')));
-    list.append(item);
+  if (archived.length) {
+    list.append(el('li', { class: 'archived-toggle', onclick: () => { showArchived = !showArchived; renderChatList(); } },
+      `${showArchived ? '▾' : '▸'} Arquivadas (${archived.length})`));
+    if (showArchived) for (const chat of archived) list.append(chatItemNode(chat));
   }
+  for (const chat of active) list.append(chatItemNode(chat));
+}
+
+// Lightweight popup menu for a chat (pin / archive / mute).
+function openChatMenu(anchor, chat) {
+  document.querySelector('.popup-menu')?.remove();
+  const menu = el('div', { class: 'popup-menu' });
+  const item = (label, fn) => el('div', { class: 'popup-item', onclick: async (e) => {
+    e.stopPropagation(); menu.remove(); await fn();
+  } }, label);
+
+  menu.append(item(chat.pinned ? 'Desafixar' : 'Fixar', () => api.pinChat(chat.id, !chat.pinned).then(applyChatPatch)));
+  menu.append(item(chat.archived ? 'Desarquivar' : 'Arquivar', () => api.archiveChat(chat.id, !chat.archived).then(applyChatPatch)));
+  menu.append(item(chat.muted ? 'Reativar som' : 'Silenciar 8h', () =>
+    api.muteChat(chat.id, chat.muted ? 0 : Date.now() + 8 * 3600 * 1000).then(applyChatPatch)));
+
+  document.body.append(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${Math.min(r.left, window.innerWidth - 170)}px`;
+  const close = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+function applyChatPatch({ chat }) {
+  if (chat) { state.chats.set(chat.id, chat); renderChatList(); }
 }
 
 // ------------------------------------------------------------------ render: header
