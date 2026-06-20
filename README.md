@@ -17,6 +17,8 @@ de apagão ou queda do servidor central.
 - **Cadastro sem telefone** — e-mail/senha (com hash bcrypt) ou Google Sign-In (OAuth 2.0).
 - **Mensagens em tempo real** via WebSocket (Socket.IO).
 - **Conversas 1:1 e em grupo**.
+- **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só sinaliza).
+- **Mensagens de voz** (gravação com MediaRecorder e player no chat).
 - **Encontrar contatos** por nome de usuário, nome de exibição ou e-mail (sem agenda telefônica).
 - **Status de entrega**: ✓ enviada, ✓✓ entregue, ✓✓ azul lida.
 - **Indicador "digitando…"**.
@@ -80,8 +82,9 @@ speedvox/
 └── public/               # PWA (frontend, sem build)
     ├── index.html
     ├── css/styles.css
-    ├── js/app.js         # UI + estado + integração socket/mesh
+    ├── js/app.js         # UI + estado + integração socket/mesh/chamadas
     ├── js/api.js         # cliente REST
+    ├── js/calls.js       # chamadas de voz/vídeo 1:1 (WebRTC + UI)
     ├── js/mesh.js        # gerenciador de mesh WebRTC
     ├── service-worker.js # cache do app-shell
     └── manifest.webmanifest
@@ -133,8 +136,8 @@ servidor quando a conectividade voltasse.
 ## 🗺️ Próximos passos
 
 - Criptografia ponta-a-ponta (Signal Protocol / libsignal).
-- Chamadas de voz e vídeo (WebRTC — a base de mídia já está no módulo mesh).
-- Mensagens de voz, status/stories e encaminhamento.
+- Chamadas de voz/vídeo em grupo (o 1:1 já está implementado).
+- Status/stories e encaminhamento de mensagens.
 - Notificações push (Web Push) e shell nativo (Android/iOS) para mesh offline real.
 
 ---

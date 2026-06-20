@@ -1,11 +1,13 @@
 import { api, getToken, setToken } from './api.js';
 import { MeshManager } from './mesh.js';
+import { CallManager } from './calls.js';
 
 // ------------------------------------------------------------------ state
 const state = {
   me: null,
   socket: null,
   mesh: null,
+  calls: null,
   chats: new Map(),       // chatId -> summary
   activeChatId: null,
   messages: new Map(),    // chatId -> [message]
@@ -77,6 +79,7 @@ function lastMessagePreview(m) {
   if (!m) return '';
   if (m.deleted) return '🚫 Mensagem apagada';
   if (m.type === 'image') return '📷 Foto';
+  if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
   if (m.type === 'system') return m.body || '';
   return m.body || '';
@@ -208,6 +211,20 @@ function setupMesh() {
   });
 }
 
+function setupCalls() {
+  state.calls = new CallManager({ socket: state.socket, selfId: state.me.id });
+}
+
+function startCall(media) {
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat) return;
+  if (chat.type !== 'direct' || !chat.otherUser) {
+    toast('Chamadas em grupo ainda não são suportadas');
+    return;
+  }
+  state.calls.startCall(chat.otherUser, media);
+}
+
 // ------------------------------------------------------------------ data load
 async function loadChats() {
   const { chats } = await api.listChats();
@@ -305,6 +322,8 @@ function presenceText(chat) {
 
 function renderChatHeader(chat) {
   if (!chat) return;
+  // Calls are 1:1 only — hide the buttons for groups.
+  $('#chat-header-actions').style.display = chat.type === 'direct' ? 'flex' : 'none';
   avatarBg($('#chat-header-avatar'), chat.avatarUrl, chat.title);
   $('#chat-header-title').textContent = chat.title;
   const sub = $('#chat-header-sub');
@@ -383,6 +402,9 @@ function renderMessages(keepScroll) {
       if (m.type === 'image' && m.mediaUrl) {
         parts.push(el('div', { class: 'msg-media' },
           el('img', { src: m.mediaUrl, loading: 'lazy', onclick: () => window.open(m.mediaUrl, '_blank') })));
+      } else if (m.type === 'audio' && m.mediaUrl) {
+        parts.push(el('div', { class: 'msg-audio' },
+          el('audio', { controls: '', src: m.mediaUrl, preload: 'none' })));
       } else if (m.type === 'file' && m.mediaUrl) {
         parts.push(el('a', { class: 'msg-file', href: m.mediaUrl, target: '_blank' },
           el('span', { class: 'file-ic' }, '📄'),
@@ -494,6 +516,59 @@ function setupComposer() {
   };
   $('#chat-search').addEventListener('input', renderChatList);
   $('#chat-header-info').onclick = showChatInfo;
+  $('#call-audio-btn').onclick = () => startCall('audio');
+  $('#call-video-btn').onclick = () => startCall('video');
+  $('#mic-btn').onclick = toggleVoiceRecording;
+}
+
+// ------------------------------------------------------------------ voice messages
+let mediaRecorder = null;
+let recordedChunks = [];
+async function toggleVoiceRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    mediaRecorder.stop();
+    return;
+  }
+  if (!state.activeChatId) return;
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    toast('Não foi possível acessar o microfone');
+    return;
+  }
+  recordedChunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
+  mediaRecorder.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    $('#mic-btn').classList.remove('recording');
+    $('#composer-rec')?.remove();
+    $('#message-input').style.display = '';
+    const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+    if (blob.size < 800) return; // ignore accidental taps
+    const file = new File([blob], `voz-${Date.now()}.webm`, { type: 'audio/webm' });
+    try {
+      const up = await api.upload(file);
+      state.socket.emit('message:send', {
+        chatId: state.activeChatId,
+        type: 'audio',
+        mediaUrl: up.url,
+        mediaName: 'Mensagem de voz',
+        mediaMime: up.mime,
+      });
+    } catch (err) { toast('Falha ao enviar áudio: ' + err.message); }
+  };
+  mediaRecorder.start();
+  $('#mic-btn').classList.add('recording');
+  const composer = document.querySelector('.composer');
+  composer.classList.add('recording');
+  const rec = el('div', { class: 'rec-indicator', id: 'composer-rec' },
+    el('span', { class: 'rec-dot' }), 'Gravando… toque no microfone para enviar');
+  $('#message-input').style.display = 'none';
+  composer.insertBefore(rec, $('#mic-btn'));
+  const stopCleanup = () => composer.classList.remove('recording');
+  mediaRecorder.addEventListener('stop', stopCleanup, { once: true });
 }
 
 // ------------------------------------------------------------------ modals
@@ -718,6 +793,7 @@ async function startApp(user) {
 
   connectSocket();
   setupMesh();
+  setupCalls();
   setupComposer();
   await loadChats();
   updateNetIndicator();

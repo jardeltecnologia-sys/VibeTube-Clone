@@ -49,6 +49,16 @@ function setup(httpServer) {
     }
   }
 
+  // Deliver an event to every member of a chat via their personal room. This
+  // guarantees delivery to all of a user's devices even for chats created after
+  // they connected (no dependency on having joined the chat room yet).
+  function emitToChat(chatId, event, payload, exceptUserId) {
+    for (const memberId of getMemberIds(chatId)) {
+      if (memberId === exceptUserId) continue;
+      io.to(`user:${memberId}`).emit(event, payload);
+    }
+  }
+
   io.on('connection', (socket) => {
     const userId = socket.userId;
     const wasOffline = !isOnline(userId);
@@ -102,7 +112,7 @@ function setup(httpServer) {
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
-        io.to(`chat:${chatId}`).emit('message:new', { message, clientId });
+        emitToChat(chatId, 'message:new', { message, clientId });
 
         // Push an updated chat summary to every member's sidebar.
         for (const memberId of getMemberIds(chatId)) {
@@ -118,12 +128,12 @@ function setup(httpServer) {
     // --- Typing indicator ---
     socket.on('typing', ({ chatId, isTyping }) => {
       if (!isMember(chatId, userId)) return;
-      socket.to(`chat:${chatId}`).emit('typing', {
+      emitToChat(chatId, 'typing', {
         chatId,
         userId,
         displayName: socket.user.display_name,
         isTyping: Boolean(isTyping),
-      });
+      }, userId);
     });
 
     // --- Read receipts: mark a chat as read up to now ---
@@ -146,7 +156,7 @@ function setup(httpServer) {
          ON CONFLICT(message_id, user_id) DO UPDATE SET status='read', at=excluded.at`
       );
       for (const m of unread) stmt.run(m.id, userId, ts);
-      io.to(`chat:${chatId}`).emit('receipt', { chatId, userId, status: 'read', at: ts });
+      emitToChat(chatId, 'receipt', { chatId, userId, status: 'read', at: ts });
       io.to(`user:${userId}`).emit('chat:update', getChatSummary(chatId, userId));
     });
 
@@ -157,7 +167,7 @@ function setup(httpServer) {
         `INSERT INTO receipts (message_id, user_id, status, at) VALUES (?, ?, 'delivered', ?)
          ON CONFLICT(message_id, user_id) DO NOTHING`
       ).run(messageId, userId, now());
-      if (chatId) io.to(`chat:${chatId}`).emit('receipt', { chatId, messageId, userId, status: 'delivered' });
+      if (chatId) emitToChat(chatId, 'receipt', { chatId, messageId, userId, status: 'delivered' });
     });
 
     // --- React to a message ---
@@ -176,7 +186,7 @@ function setup(httpServer) {
         ).run(messageId, userId, emoji);
       }
       const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id = ?').all(messageId);
-      io.to(`chat:${msg.chat_id}`).emit('message:reaction', { messageId, reactions });
+      emitToChat(msg.chat_id, 'message:reaction', { messageId, reactions });
     });
 
     // --- Delete a message (sender only) ---
@@ -184,7 +194,7 @@ function setup(httpServer) {
       const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
       if (!msg || msg.sender_id !== userId) return;
       db.prepare('UPDATE messages SET deleted = 1, body = NULL WHERE id = ?').run(messageId);
-      io.to(`chat:${msg.chat_id}`).emit('message:deleted', { messageId, chatId: msg.chat_id });
+      emitToChat(msg.chat_id, 'message:deleted', { messageId, chatId: msg.chat_id });
     });
 
     // --- Join a freshly created chat room (e.g. just created a group) ---
@@ -196,6 +206,37 @@ function setup(httpServer) {
     socket.on('mesh:signal', ({ to, signal }) => {
       if (!to) return;
       io.to(`user:${to}`).emit('mesh:signal', { from: userId, signal });
+    });
+
+    // --- Voice / video call signaling (1:1 WebRTC) ---
+    // The server only relays signaling; media flows peer-to-peer.
+    socket.on('call:invite', ({ to, callId, media, chatId }) => {
+      if (!to || !callId) return;
+      if (!isOnline(to)) {
+        socket.emit('call:unavailable', { callId, reason: 'offline' });
+        return;
+      }
+      io.to(`user:${to}`).emit('call:incoming', {
+        from: publicUser(socket.user),
+        callId,
+        media: media === 'video' ? 'video' : 'audio',
+        chatId,
+      });
+    });
+    socket.on('call:accept', ({ to, callId }) => {
+      io.to(`user:${to}`).emit('call:accepted', { from: userId, callId });
+    });
+    socket.on('call:reject', ({ to, callId }) => {
+      io.to(`user:${to}`).emit('call:rejected', { from: userId, callId });
+    });
+    socket.on('call:sdp', ({ to, callId, sdp }) => {
+      io.to(`user:${to}`).emit('call:sdp', { from: userId, callId, sdp });
+    });
+    socket.on('call:ice', ({ to, callId, candidate }) => {
+      io.to(`user:${to}`).emit('call:ice', { from: userId, callId, candidate });
+    });
+    socket.on('call:end', ({ to, callId }) => {
+      io.to(`user:${to}`).emit('call:ended', { from: userId, callId });
     });
 
     socket.on('disconnect', () => {
