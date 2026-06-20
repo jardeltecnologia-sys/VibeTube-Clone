@@ -15,6 +15,7 @@ const state = {
   presence: new Map(),    // userId -> { online, lastSeen }
   typing: new Map(),      // chatId -> Map(userId -> displayName)
   replyTo: null,
+  editing: null,
   online: navigator.onLine,
   e2eeReady: false,
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
@@ -196,6 +197,19 @@ function connectSocket() {
       if (m) { m.deleted = true; m.body = null; m.mediaUrl = null; }
     }
     if (chatId === state.activeChatId) renderMessages();
+    renderChatList();
+  });
+
+  socket.on('message:edited', ({ messageId, chatId, body, encrypted, editedAt }) => {
+    const list = state.messages.get(chatId);
+    const m = list && list.find((x) => x.id === messageId);
+    if (m) {
+      m.body = body;
+      m.encrypted = encrypted;
+      m.editedAt = editedAt;
+      if (encrypted) { m._plain = null; m._decryptFailed = false; decryptInto(m); }
+    }
+    if (chatId === state.activeChatId) renderMessages(true);
     renderChatList();
   });
 
@@ -455,6 +469,9 @@ function renderMessages(keepScroll) {
     if (chat.type === 'group' && !mine) {
       parts.push(el('div', { class: 'msg-sender' }, sender ? sender.displayName : 'Alguém'));
     }
+    if (m.forwarded && !m.deleted) {
+      parts.push(el('div', { class: 'msg-forwarded' }, '↪ Encaminhada'));
+    }
     if (m.replyTo) {
       const r = findMessageById(m.replyTo);
       const rSender = r && chat.members.find((x) => x.id === r.senderId);
@@ -486,7 +503,9 @@ function renderMessages(keepScroll) {
       }
     }
 
-    const meta = el('div', { class: 'msg-meta' }, fmtTime(m.createdAt),
+    const meta = el('div', { class: 'msg-meta' },
+      m.editedAt && !m.deleted ? el('span', { class: 'edited-label' }, 'editada') : '',
+      fmtTime(m.createdAt),
       mine && !m.deleted ? tickFor(m, chat) : '');
     parts.push(meta);
 
@@ -496,8 +515,11 @@ function renderMessages(keepScroll) {
     }
 
     const actions = el('div', { class: 'msg-actions' },
-      el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
-      el('button', { title: 'Reagir', onclick: () => react(m, '👍') }, '👍'),
+      m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
+      m.deleted ? '' : el('button', { title: 'Reagir', onclick: () => react(m, '👍') }, '👍'),
+      m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
+      mine && !m.deleted && m.type === 'text'
+        ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
       mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, '🗑') : '');
     parts.push(actions);
 
@@ -509,6 +531,7 @@ function renderMessages(keepScroll) {
 
 // ------------------------------------------------------------------ message actions
 function setReply(m) {
+  state.editing = null;
   state.replyTo = m;
   const sender = (state.chats.get(state.activeChatId).members || []).find((x) => x.id === m.senderId);
   $('#reply-preview-name').textContent = sender ? sender.displayName : '';
@@ -518,11 +541,93 @@ function setReply(m) {
 }
 function clearReply() {
   state.replyTo = null;
+  state.editing = null;
   $('#reply-preview').classList.add('hidden');
 }
 function react(m, emoji) { state.socket.emit('message:react', { messageId: m.id, emoji }); }
 function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
+}
+
+// Begin editing one of my own text messages (reuses the reply bar as an editor).
+function startEdit(m) {
+  state.replyTo = null;
+  state.editing = m;
+  $('#reply-preview-name').textContent = 'Editando mensagem';
+  $('#reply-preview-text').textContent = displayText(m) || '';
+  $('#reply-preview').classList.remove('hidden');
+  const input = $('#message-input');
+  input.value = displayText(m) || '';
+  input.focus();
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+}
+
+async function applyEdit(newText) {
+  const m = state.editing;
+  state.editing = null;
+  $('#reply-preview').classList.add('hidden');
+  if (!m || !newText.trim()) return;
+  const chat = state.chats.get(m.chatId);
+  let payload = { messageId: m.id, body: newText.trim() };
+  const key = await ensureChatKey(chat);
+  if (key) {
+    payload.body = JSON.stringify(await e2ee.encrypt(key, newText.trim()));
+    payload.encrypted = true;
+    m._plain = newText.trim();
+  } else {
+    m._plain = null;
+    m.body = newText.trim();
+  }
+  m.encrypted = Boolean(key);
+  m.editedAt = Date.now();
+  renderMessages(true);
+  state.socket.emit('message:edit', payload);
+}
+
+// Forward a message into another chat (encrypting if that chat is encrypted).
+function forwardMessage(m) {
+  const chats = [...state.chats.values()].filter((c) => c.id);
+  const list = el('div', {});
+  for (const c of chats) {
+    const avatar = el('span', { class: 'avatar sm' });
+    avatarBg(avatar, c.avatarUrl, c.title);
+    list.append(el('div', { class: 'user-result', onclick: async () => {
+      backdrop.remove();
+      await doForward(m, c.id);
+    } },
+      avatar,
+      el('div', { class: 'user-result-body' },
+        el('div', { class: 'user-result-name' }, c.title),
+        el('div', { class: 'user-result-sub' }, c.type === 'group' ? 'Grupo' : 'Contato'))));
+  }
+  const body = el('div', { class: 'modal-body' }, list);
+  const backdrop = modalShell('Encaminhar para…', body);
+}
+
+async function doForward(m, targetChatId) {
+  const target = state.chats.get(targetChatId);
+  const payload = { chatId: targetChatId, type: m.type, forwarded: true };
+  if (m.type === 'text') {
+    const text = displayText(m);
+    if (text == null) return toast('Não é possível encaminhar uma mensagem cifrada ainda não decifrada');
+    payload.body = text;
+    let plainText;
+    const key = await ensureChatKey(target);
+    if (key) {
+      payload.body = JSON.stringify(await e2ee.encrypt(key, text));
+      payload.encrypted = true;
+      plainText = text;
+    }
+    queueAndSend(payload, plainText);
+  } else {
+    payload.mediaUrl = m.mediaUrl;
+    payload.mediaName = m.mediaName;
+    payload.mediaMime = m.mediaMime;
+    queueAndSend(payload);
+  }
+  toast(`Encaminhada para ${target.title}`);
+  if (targetChatId !== state.activeChatId) openChat(targetChatId);
 }
 
 // ---- offline outbox: queued sends survive flaky networks and reconnects ----
@@ -557,6 +662,8 @@ function optimisticMessage(payload) {
     mediaName: payload.mediaName || null,
     mediaMime: payload.mediaMime || null,
     replyTo: payload.replyTo || null,
+    forwarded: Boolean(payload.forwarded),
+    encrypted: Boolean(payload.encrypted),
     createdAt: Date.now(),
     deleted: false,
     reactions: [],
@@ -631,6 +738,15 @@ async function sendMessage() {
   const input = $('#message-input');
   const body = input.value.trim();
   if (!body || !state.activeChatId) return;
+
+  // Editing an existing message takes priority over sending a new one.
+  if (state.editing) {
+    input.value = '';
+    input.style.height = 'auto';
+    await applyEdit(body);
+    return;
+  }
+
   const chat = state.chats.get(state.activeChatId);
   const payload = { chatId: state.activeChatId, body, type: 'text' };
   if (state.replyTo) payload.replyTo = state.replyTo.id;
@@ -690,7 +806,10 @@ function setupComposer() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
   $('#send-btn').onclick = sendMessage;
-  $('#reply-cancel').onclick = clearReply;
+  $('#reply-cancel').onclick = () => {
+    if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
+    clearReply();
+  };
   $('#attach-btn').onclick = () => $('#file-input').click();
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {

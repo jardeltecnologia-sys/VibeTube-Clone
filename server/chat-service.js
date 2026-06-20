@@ -51,6 +51,7 @@ function serializeMessage(row) {
     mediaMime: row.deleted ? null : row.media_mime,
     replyTo: row.reply_to,
     encrypted: Boolean(row.encrypted),
+    forwarded: Boolean(row.forwarded),
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deleted: Boolean(row.deleted),

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS messages (
   media_mime  TEXT,
   reply_to    TEXT,
   encrypted   INTEGER NOT NULL DEFAULT 0,  -- 1 = body holds an E2EE ciphertext envelope
+  forwarded   INTEGER NOT NULL DEFAULT 0,
   created_at  INTEGER NOT NULL,
   edited_at   INTEGER,
   deleted     INTEGER NOT NULL DEFAULT 0,
@@ -92,5 +93,6 @@ function ensureColumn(table, column, ddl) {
 }
 ensureColumn('users', 'public_key', 'public_key TEXT');
 ensureColumn('messages', 'encrypted', 'encrypted INTEGER NOT NULL DEFAULT 0');
+ensureColumn('messages', 'forwarded', 'forwarded INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

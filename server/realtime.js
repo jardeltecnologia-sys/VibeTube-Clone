@@ -83,7 +83,7 @@ function setup(httpServer) {
     // --- Send a message ---
     socket.on('message:send', (payload, cb) => {
       try {
-        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted } =
+        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded } =
           payload || {};
         if (!isMember(chatId, userId)) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
@@ -99,8 +99,8 @@ function setup(httpServer) {
         // Encrypted bodies are opaque ciphertext — keep them verbatim (no trim).
         const storedBody = encrypted ? body : (body ? body.trim() : null);
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -112,6 +112,7 @@ function setup(httpServer) {
           mediaMime || null,
           replyTo || null,
           encrypted ? 1 : 0,
+          forwarded ? 1 : 0,
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
@@ -190,6 +191,20 @@ function setup(httpServer) {
       }
       const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id = ?').all(messageId);
       emitToChat(msg.chat_id, 'message:reaction', { messageId, reactions });
+    });
+
+    // --- Edit a text message (sender only) ---
+    socket.on('message:edit', ({ messageId, body, encrypted }) => {
+      const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+      if (!msg || msg.sender_id !== userId || msg.deleted || msg.type !== 'text') return;
+      if (!body || (!encrypted && !body.trim())) return;
+      const ts = now();
+      const stored = encrypted ? body : body.trim();
+      db.prepare('UPDATE messages SET body = ?, encrypted = ?, edited_at = ? WHERE id = ?')
+        .run(stored, encrypted ? 1 : 0, ts, messageId);
+      emitToChat(msg.chat_id, 'message:edited', {
+        messageId, chatId: msg.chat_id, body: stored, encrypted: Boolean(encrypted), editedAt: ts,
+      });
     });
 
     // --- Delete a message (sender only) ---
