@@ -1,0 +1,24 @@
+{
+  "name": "speedvox",
+  "version": "0.1.0",
+  "description": "SpeedVox — a WhatsApp-style messaging app with no phone number required. Sign in with email or Google. Real-time chat, groups, media, presence, and a mesh-ready architecture for blackout resilience.",
+  "type": "commonjs",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "seed": "node server/seed.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.0.0",
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "socket.io": "^4.7.5"
+  },
+  "license": "MIT"
+}

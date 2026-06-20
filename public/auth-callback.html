@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <title>Entrando… · SpeedVox</title>
+  <style>
+    body { background: #0b141a; color: #e9edef; font-family: -apple-system, sans-serif;
+      display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
+  </style>
+</head>
+<body>
+  <p>Concluindo o login com Google…</p>
+  <script>
+    // The server redirected here with #token=... ; persist it and return to the app.
+    const hash = location.hash || '';
+    const m = hash.match(/token=([^&]+)/);
+    if (m) localStorage.setItem('speedvox_token', decodeURIComponent(m[1]));
+    location.replace('/');
+  </script>
+</body>
+</html>

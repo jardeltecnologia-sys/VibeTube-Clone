@@ -1,0 +1,161 @@
+'use strict';
+
+const db = require('./db');
+const { id, now, publicUser } = require('./util');
+
+function isMember(chatId, userId) {
+  return Boolean(
+    db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId)
+  );
+}
+
+function getMemberIds(chatId) {
+  return db
+    .prepare('SELECT user_id FROM chat_members WHERE chat_id = ?')
+    .all(chatId)
+    .map((r) => r.user_id);
+}
+
+function getMembers(chatId) {
+  return db
+    .prepare(
+      `SELECT u.*, m.role FROM chat_members m
+       JOIN users u ON u.id = m.user_id
+       WHERE m.chat_id = ?`
+    )
+    .all(chatId)
+    .map((u) => ({ ...publicUser(u), role: u.role }));
+}
+
+function serializeMessage(row) {
+  if (!row) return null;
+  const reactions = db
+    .prepare('SELECT user_id, emoji FROM reactions WHERE message_id = ?')
+    .all(row.id);
+  const readers = db
+    .prepare("SELECT user_id FROM receipts WHERE message_id = ? AND status = 'read'")
+    .all(row.id)
+    .map((r) => r.user_id);
+  const delivered = db
+    .prepare('SELECT user_id FROM receipts WHERE message_id = ?')
+    .all(row.id)
+    .map((r) => r.user_id);
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    senderId: row.sender_id,
+    type: row.type,
+    body: row.deleted ? null : row.body,
+    mediaUrl: row.deleted ? null : row.media_url,
+    mediaName: row.deleted ? null : row.media_name,
+    mediaMime: row.deleted ? null : row.media_mime,
+    replyTo: row.reply_to,
+    createdAt: row.created_at,
+    editedAt: row.edited_at,
+    deleted: Boolean(row.deleted),
+    reactions,
+    readBy: readers,
+    deliveredTo: delivered,
+  };
+}
+
+// Builds the per-user chat summary used in the sidebar.
+function getChatSummary(chatId, userId) {
+  const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(chatId);
+  if (!chat) return null;
+  const membership = db
+    .prepare('SELECT * FROM chat_members WHERE chat_id = ? AND user_id = ?')
+    .get(chatId, userId);
+  if (!membership) return null;
+
+  const members = getMembers(chatId);
+  let title = chat.name;
+  let avatarUrl = chat.avatar_url;
+  let otherUser = null;
+  if (chat.type === 'direct') {
+    otherUser = members.find((m) => m.id !== userId) || members[0];
+    title = otherUser ? otherUser.displayName : 'Conversa';
+    avatarUrl = otherUser ? otherUser.avatarUrl : null;
+  }
+
+  const lastRow = db
+    .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1')
+    .get(chatId);
+
+  const unread = db
+    .prepare(
+      `SELECT COUNT(*) AS c FROM messages
+       WHERE chat_id = ? AND sender_id != ? AND created_at > ?`
+    )
+    .get(chatId, userId, membership.last_read_at).c;
+
+  return {
+    id: chat.id,
+    type: chat.type,
+    title,
+    avatarUrl,
+    members,
+    otherUser,
+    createdBy: chat.created_by,
+    lastMessage: serializeMessage(lastRow),
+    unread,
+    lastReadAt: membership.last_read_at,
+  };
+}
+
+function listChatsForUser(userId) {
+  const ids = db
+    .prepare('SELECT chat_id FROM chat_members WHERE user_id = ?')
+    .all(userId)
+    .map((r) => r.chat_id);
+  const summaries = ids
+    .map((cid) => getChatSummary(cid, userId))
+    .filter(Boolean)
+    .sort((a, b) => {
+      const at = a.lastMessage ? a.lastMessage.createdAt : 0;
+      const bt = b.lastMessage ? b.lastMessage.createdAt : 0;
+      return bt - at;
+    });
+  return summaries;
+}
+
+// Find an existing 1:1 chat between two users, or create one.
+function findOrCreateDirectChat(userA, userB) {
+  const existing = db
+    .prepare(
+      `SELECT c.id FROM chats c
+       JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ?
+       JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ?
+       WHERE c.type = 'direct' LIMIT 1`
+    )
+    .get(userA, userB);
+  if (existing) return existing.id;
+
+  const chatId = id();
+  const ts = now();
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO chats (id, type, created_by, created_at) VALUES (?, ?, ?, ?)').run(
+      chatId,
+      'direct',
+      userA,
+      ts
+    );
+    const ins = db.prepare(
+      'INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
+    );
+    ins.run(chatId, userA, 'member', ts);
+    ins.run(chatId, userB, 'member', ts);
+  });
+  tx();
+  return chatId;
+}
+
+module.exports = {
+  isMember,
+  getMemberIds,
+  getMembers,
+  serializeMessage,
+  getChatSummary,
+  listChatsForUser,
+  findOrCreateDirectChat,
+};
