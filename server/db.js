@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   display_name TEXT NOT NULL,
   avatar_url   TEXT,
   about        TEXT DEFAULT 'Disponível',
+  public_key   TEXT,                 -- ECDH public key (JWK) for end-to-end encryption
   last_seen    INTEGER,
   created_at   INTEGER NOT NULL
 );
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS messages (
   media_name  TEXT,
   media_mime  TEXT,
   reply_to    TEXT,
+  encrypted   INTEGER NOT NULL DEFAULT 0,  -- 1 = body holds an E2EE ciphertext envelope
   created_at  INTEGER NOT NULL,
   edited_at   INTEGER,
   deleted     INTEGER NOT NULL DEFAULT 0,
@@ -82,5 +84,13 @@ CREATE TABLE IF NOT EXISTS reactions (
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_members_user ON chat_members(user_id);
 `);
+
+// Migrations for databases created before these columns existed.
+function ensureColumn(table, column, ddl) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all();
+  if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+}
+ensureColumn('users', 'public_key', 'public_key TEXT');
+ensureColumn('messages', 'encrypted', 'encrypted INTEGER NOT NULL DEFAULT 0');
 
 module.exports = db;

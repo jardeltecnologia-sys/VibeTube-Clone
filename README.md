@@ -16,6 +16,9 @@ de apagão ou queda do servidor central.
 
 - **Cadastro sem telefone** — e-mail/senha (com hash bcrypt) ou Google Sign-In (OAuth 2.0).
 - **Mensagens em tempo real** via WebSocket (Socket.IO).
+- **Criptografia ponta-a-ponta (E2EE)** nas conversas 1:1 — ECDH P-256 + AES-GCM
+  (Web Crypto). A chave privada nunca sai do dispositivo; o servidor só
+  armazena/relaia texto cifrado.
 - **Conversas 1:1 e em grupo**.
 - **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só sinaliza).
 - **Mensagens de voz** (gravação com MediaRecorder e player no chat).
@@ -88,6 +91,7 @@ speedvox/
     ├── js/app.js         # UI + estado + integração socket/mesh/chamadas
     ├── js/api.js         # cliente REST
     ├── js/calls.js       # chamadas de voz/vídeo 1:1 (WebRTC + UI)
+    ├── js/e2ee.js        # criptografia ponta-a-ponta (ECDH P-256 + AES-GCM)
     ├── js/mesh.js        # gerenciador de mesh WebRTC
     ├── service-worker.js # cache do app-shell
     └── manifest.webmanifest
@@ -128,17 +132,28 @@ servidor quando a conectividade voltasse.
 
 ## 🔒 Segurança
 
+- **Criptografia ponta-a-ponta (E2EE)** nas conversas 1:1: cada usuário tem um par
+  de chaves **ECDH P-256** (Web Crypto). A chave privada fica apenas no
+  dispositivo (localStorage); só a chave pública é publicada no servidor. Ambos os
+  lados derivam o mesmo segredo via `ECDH(minhaPrivada, públicaDoOutro)` e cada
+  mensagem é cifrada com **AES-GCM** (IV aleatório por mensagem). O servidor só
+  armazena/relaia o texto cifrado — não consegue ler as mensagens.
 - Senhas com **bcrypt**; sessões com **JWT** (expiração de 30 dias).
 - Sockets autenticados no handshake; cada operação valida a participação no chat.
 - Uploads limitados a 25 MB.
-- **Nota:** a criptografia atual é em trânsito (HTTPS/TLS quando hospedado com
-  TLS). Criptografia ponta-a-ponta (E2EE) é o próximo passo natural — ver roteiro.
+- **Limitações conhecidas (no roteiro):** o E2EE usa um segredo ECDH estático por
+  par — é ponta-a-ponta, mas **ainda não tem forward secrecy** (próximo passo:
+  Double Ratchet). Conversas em **grupo** e **mídia/voz** ainda não são cifradas
+  fim-a-fim (apenas em trânsito via TLS). Verificação de impressão digital de
+  chave (detecção de troca de chave) também está no roteiro.
 
 ---
 
 ## 🗺️ Próximos passos
 
-- Criptografia ponta-a-ponta (Signal Protocol / libsignal).
+- Forward secrecy via **Double Ratchet** (sobre as chaves de identidade já existentes).
+- E2EE para **grupos** (sender keys) e para **mídia/mensagens de voz**.
+- Verificação de chave (números de segurança / QR) entre contatos.
 - Chamadas de voz/vídeo em grupo (o 1:1 já está implementado).
 - Status/stories e encaminhamento de mensagens.
 - Notificações push (Web Push) e shell nativo (Android/iOS) para mesh offline real.
@@ -148,4 +163,4 @@ servidor quando a conectividade voltasse.
 ## 🧪 Stack
 
 Node.js · Express · Socket.IO · better-sqlite3 · bcryptjs · jsonwebtoken · multer ·
-WebRTC · PWA (Service Worker + Web App Manifest).
+WebRTC · Web Crypto (ECDH/AES-GCM) · PWA (Service Worker + Web App Manifest).

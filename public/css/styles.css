@@ -215,6 +215,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
   padding: 10px; border-radius: 6px; margin-bottom: 4px; text-decoration: none; color: var(--text); }
 .msg-file .file-ic { font-size: 24px; }
 .msg-deleted { font-style: italic; color: var(--text-dim); }
+.msg-encrypted { font-style: italic; color: var(--text-dim); }
 .msg-meta { display: flex; align-items: center; justify-content: flex-end; gap: 4px;
   font-size: 11px; color: var(--text-dim); margin-top: 2px; }
 .msg.out .msg-meta { color: rgba(233,237,239,.6); }

@@ -1,6 +1,7 @@
 import { api, getToken, setToken } from './api.js';
 import { MeshManager } from './mesh.js';
 import { CallManager } from './calls.js';
+import * as e2ee from './e2ee.js';
 
 // ------------------------------------------------------------------ state
 const state = {
@@ -15,6 +16,8 @@ const state = {
   typing: new Map(),      // chatId -> Map(userId -> displayName)
   replyTo: null,
   online: navigator.onLine,
+  e2eeReady: false,
+  keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
 };
 
 // ------------------------------------------------------------------ helpers
@@ -82,6 +85,11 @@ function lastMessagePreview(m) {
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
   if (m.type === 'system') return m.body || '';
+  if (m.encrypted) {
+    const known = findMessageById(m.id);
+    const plain = (known && known._plain != null) ? known._plain : (m._plain != null ? m._plain : null);
+    return plain != null ? plain : '🔒 Mensagem criptografada';
+  }
   return m.body || '';
 }
 
@@ -225,6 +233,44 @@ function startCall(media) {
   state.calls.startCall(chat.otherUser, media);
 }
 
+// ------------------------------------------------------------------ encryption
+// Resolve (and cache) the shared AES key for a direct chat. null = not encrypted.
+async function ensureChatKey(chat) {
+  if (!state.e2eeReady || !chat || chat.type !== 'direct' || !chat.otherUser) return null;
+  if (state.keyCache.has(chat.id)) return state.keyCache.get(chat.id);
+  let pub = chat.otherUser.publicKey;
+  if (!pub) {
+    try { const { user } = await api.getUser(chat.otherUser.id); pub = user.publicKey; } catch {}
+  }
+  const key = pub ? await e2ee.deriveChatKey(pub) : null;
+  state.keyCache.set(chat.id, key);
+  return key;
+}
+
+function chatIsEncrypted(chat) {
+  return Boolean(chat && chat.type === 'direct' && state.keyCache.get(chat.id));
+}
+
+// Decrypt an incoming encrypted message in place, then refresh the views.
+async function decryptInto(m) {
+  const chat = state.chats.get(m.chatId);
+  const key = await ensureChatKey(chat);
+  if (!key) { m._decryptFailed = true; }
+  else {
+    try { m._plain = await e2ee.decrypt(key, m.body); m._decryptFailed = false; }
+    catch { m._decryptFailed = true; }
+  }
+  if (m.chatId === state.activeChatId) renderMessages(true);
+  renderChatList();
+}
+
+// Plaintext to display for a message (handles encrypted bodies).
+function displayText(m) {
+  if (!m.encrypted) return m.body;
+  if (m._plain != null) return m._plain;
+  return null; // not yet decrypted (or failed)
+}
+
 // ------------------------------------------------------------------ data load
 async function loadChats() {
   const { chats } = await api.listChats();
@@ -242,11 +288,13 @@ async function openChat(chatId) {
   $('#app').classList.add('in-chat');
 
   const chat = state.chats.get(chatId);
+  await ensureChatKey(chat); // derive E2EE key up front so messages decrypt immediately
   renderChatHeader(chat);
   renderChatList();
 
   const { messages } = await api.getMessages(chatId);
   state.messages.set(chatId, messages);
+  for (const m of messages) if (m.encrypted && m._plain == null) decryptInto(m);
   renderMessages();
   renderTyping();
 
@@ -277,6 +325,7 @@ function addMessage(message, clientId) {
   }
   if (list.find((m) => m.id === message.id)) return; // already have it
   list.push(message);
+  if (message.encrypted && message._plain == null) decryptInto(message);
   if (message.chatId === state.activeChatId) renderMessages();
 }
 
@@ -347,7 +396,7 @@ function renderChatHeader(chat) {
       : 'digitando…';
     sub.classList.add('typing');
   } else {
-    sub.textContent = presenceText(chat);
+    sub.textContent = (chatIsEncrypted(chat) ? '🔒 ' : '') + presenceText(chat);
     sub.classList.remove('typing');
   }
 }
@@ -428,7 +477,13 @@ function renderMessages(keepScroll) {
           el('span', { class: 'file-ic' }, '📄'),
           el('span', {}, m.mediaName || 'Arquivo')));
       }
-      if (m.body) parts.push(el('div', { class: 'msg-body' }, m.body));
+      const text = displayText(m);
+      if (m.encrypted && text == null) {
+        parts.push(el('div', { class: 'msg-body msg-encrypted' },
+          m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
+      } else if (text) {
+        parts.push(el('div', { class: 'msg-body' }, text));
+      }
     }
 
     const meta = el('div', { class: 'msg-meta' }, fmtTime(m.createdAt),
@@ -562,20 +617,36 @@ function flushOutbox() {
   for (const payload of loadOutbox()) deliver(payload);
 }
 
-function queueAndSend(payload) {
+// plainText: original plaintext to show optimistically when payload.body is ciphertext.
+function queueAndSend(payload, plainText) {
   payload.clientId = newClientId();
   addToOutbox(payload);
-  addMessage(optimisticMessage(payload));
+  const opt = optimisticMessage(payload);
+  if (plainText != null) opt._plain = plainText;
+  addMessage(opt);
   deliver(payload);
 }
 
-function sendMessage() {
+async function sendMessage() {
   const input = $('#message-input');
   const body = input.value.trim();
   if (!body || !state.activeChatId) return;
+  const chat = state.chats.get(state.activeChatId);
   const payload = { chatId: state.activeChatId, body, type: 'text' };
   if (state.replyTo) payload.replyTo = state.replyTo.id;
-  queueAndSend(payload);
+
+  // Encrypt end-to-end for direct chats whose peer has a published key.
+  let plainText;
+  const key = await ensureChatKey(chat);
+  if (key) {
+    const env = await e2ee.encrypt(key, body);
+    payload.body = JSON.stringify(env);
+    payload.encrypted = true;
+    plainText = body;
+  }
+
+  // Input may have changed during async encryption; only clear if unchanged.
+  queueAndSend(payload, plainText);
   input.value = '';
   input.style.height = 'auto';
   clearReply();
@@ -905,6 +976,19 @@ async function startApp(user) {
   $('#auth-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   refreshMyAvatar();
+
+  // Set up end-to-end encryption: generate/load the identity key and publish
+  // the public half so contacts can encrypt to us. The private key never leaves
+  // this device.
+  if (e2ee.isAvailable()) {
+    try {
+      const pub = await e2ee.initIdentity();
+      state.e2eeReady = true;
+      if (pub && pub !== user.publicKey) {
+        api.updateProfile({ publicKey: pub }).then(({ user: u }) => { state.me = u; }).catch(() => {});
+      }
+    } catch { /* encryption stays off; messaging still works in plaintext */ }
+  }
 
   connectSocket();
   setupMesh();

@@ -33,7 +33,7 @@ router.get('/:id', (req, res) => {
 
 // Update own profile.
 router.patch('/me', (req, res) => {
-  const { displayName, about, avatarUrl } = req.body || {};
+  const { displayName, about, avatarUrl, publicKey } = req.body || {};
   const fields = [];
   const values = [];
   if (typeof displayName === 'string' && displayName.trim()) {
@@ -47,6 +47,10 @@ router.patch('/me', (req, res) => {
   if (typeof avatarUrl === 'string') {
     fields.push('avatar_url = ?');
     values.push(avatarUrl);
+  }
+  if (typeof publicKey === 'string' && publicKey.length < 2000) {
+    fields.push('public_key = ?');
+    values.push(publicKey);
   }
   if (!fields.length) return res.status(400).json({ error: 'nada para atualizar' });
   values.push(req.user.id);

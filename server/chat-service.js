@@ -50,6 +50,7 @@ function serializeMessage(row) {
     mediaName: row.deleted ? null : row.media_name,
     mediaMime: row.deleted ? null : row.media_mime,
     replyTo: row.reply_to,
+    encrypted: Boolean(row.encrypted),
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deleted: Boolean(row.deleted),

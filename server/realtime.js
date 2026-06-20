@@ -83,7 +83,7 @@ function setup(httpServer) {
     // --- Send a message ---
     socket.on('message:send', (payload, cb) => {
       try {
-        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId } =
+        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted } =
           payload || {};
         if (!isMember(chatId, userId)) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
@@ -96,19 +96,22 @@ function setup(httpServer) {
         }
         const msgId = id();
         const ts = now();
+        // Encrypted bodies are opaque ciphertext — keep them verbatim (no trim).
+        const storedBody = encrypted ? body : (body ? body.trim() : null);
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
           userId,
           msgType,
-          body ? body.trim() : null,
+          storedBody,
           mediaUrl || null,
           mediaName || null,
           mediaMime || null,
           replyTo || null,
+          encrypted ? 1 : 0,
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
