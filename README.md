@@ -19,7 +19,10 @@ de apagão ou queda do servidor central.
 - **Criptografia ponta-a-ponta (E2EE)** nas conversas 1:1 — ECDH P-256 + AES-GCM
   (Web Crypto). A chave privada nunca sai do dispositivo; o servidor só
   armazena/relaia texto cifrado.
-- **Conversas 1:1 e em grupo**.
+- **Conversas 1:1 e em grupo**, com **gestão de grupos**: renomear, foto do
+  grupo, adicionar/remover participantes, promover/rebaixar admins, mensagens de
+  sistema e transferência automática de admin ao sair.
+- **Foto de perfil e de grupo** (upload de imagem).
 - **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só sinaliza).
 - **Mensagens de voz** (gravação com MediaRecorder e player no chat).
 - **Encontrar contatos** por nome de usuário, nome de exibição ou e-mail (sem agenda telefônica).

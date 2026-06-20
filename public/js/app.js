@@ -158,6 +158,19 @@ function connectSocket() {
     if (summary.id === state.activeChatId) renderChatHeader(summary);
   });
 
+  socket.on('chat:removed', ({ chatId }) => {
+    state.chats.delete(chatId);
+    state.messages.delete(chatId);
+    state.keyCache.delete(chatId);
+    if (chatId === state.activeChatId) {
+      state.activeChatId = null;
+      $('#chat-view').classList.add('hidden');
+      $('#empty-state').classList.remove('hidden');
+      $('#app').classList.remove('in-chat');
+    }
+    renderChatList();
+  });
+
   socket.on('typing', ({ chatId, userId, displayName, isTyping }) => {
     if (!state.typing.has(chatId)) state.typing.set(chatId, new Map());
     const map = state.typing.get(chatId);
@@ -988,13 +1001,36 @@ function newGroupModal() {
   setTimeout(() => nameInput.focus(), 50);
 }
 
+// Make an avatar node clickable to upload a new image. onUploaded receives the URL.
+function makeAvatarUploadable(node, name, onUploaded) {
+  node.style.cursor = 'pointer';
+  node.title = 'Alterar foto';
+  const input = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const up = await api.upload(file);
+      avatarBg(node, up.url, name);
+      onUploaded(up.url);
+    } catch (err) { toast('Falha ao enviar imagem: ' + err.message); }
+  };
+  node.onclick = () => input.click();
+  node.append(input);
+  return node;
+}
+
 function profileModal() {
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
+  let pendingAvatar = null;
+  makeAvatarUploadable(big, state.me.displayName, (url) => { pendingAvatar = url; });
   const nameInput = el('input', { type: 'text', value: state.me.displayName });
   const aboutInput = el('input', { type: 'text', value: state.me.about || '' });
   const save = el('button', { class: 'btn-primary', onclick: async () => {
-    const { user } = await api.updateProfile({ displayName: nameInput.value, about: aboutInput.value });
+    const data = { displayName: nameInput.value, about: aboutInput.value };
+    if (pendingAvatar) data.avatarUrl = pendingAvatar;
+    const { user } = await api.updateProfile(data);
     state.me = user;
     refreshMyAvatar();
     backdrop.remove();
@@ -1035,13 +1071,67 @@ function meshToggleRow() {
 function showChatInfo() {
   const chat = state.chats.get(state.activeChatId);
   if (!chat) return;
+  const isGroup = chat.type === 'group';
+  const iAmAdmin = isGroup && (chat.members.find((m) => m.id === state.me.id) || {}).role === 'admin';
+
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, chat.avatarUrl, chat.title);
-  const members = el('div', {});
-  for (const m of chat.members) {
-    members.append(userResultRow(m, { selectable: false, onToggle: () => {} }));
+  if (isGroup && iAmAdmin) {
+    makeAvatarUploadable(big, chat.title, async (url) => {
+      await api.updateChat(chat.id, { avatarUrl: url });
+      toast('Foto do grupo atualizada');
+    });
   }
-  const leave = el('button', { class: 'btn-primary', style: 'background:var(--danger)', onclick: async () => {
+
+  // Editable title for group admins.
+  let titleNode;
+  if (isGroup && iAmAdmin) {
+    const titleInput = el('input', { type: 'text', value: chat.title, style: 'text-align:center;font-size:18px' });
+    const saveName = el('button', { class: 'icon-btn', title: 'Salvar nome', onclick: async () => {
+      if (titleInput.value.trim() && titleInput.value.trim() !== chat.title) {
+        await api.updateChat(chat.id, { name: titleInput.value.trim() });
+        toast('Nome do grupo atualizado');
+      }
+    } }, '✓');
+    titleNode = el('div', { style: 'display:flex;gap:6px;align-items:center;margin-bottom:6px' }, titleInput, saveName);
+  } else {
+    titleNode = el('h3', { style: 'text-align:center;margin-bottom:6px' }, chat.title);
+  }
+
+  const members = el('div', {});
+  function renderMembers() {
+    members.innerHTML = '';
+    const fresh = state.chats.get(chat.id);
+    if (!fresh) return;
+    for (const m of fresh.members) {
+      const avatar = el('span', { class: 'avatar sm' });
+      avatarBg(avatar, m.avatarUrl, m.displayName);
+      const actions = [];
+      if (iAmAdmin && m.id !== state.me.id) {
+        actions.push(el('button', { class: 'icon-btn', title: m.role === 'admin' ? 'Remover admin' : 'Tornar admin',
+          onclick: async () => { await api.setMemberRole(chat.id, m.id, m.role === 'admin' ? 'member' : 'admin'); setTimeout(renderMembers, 150); } },
+          m.role === 'admin' ? '★' : '☆'));
+        actions.push(el('button', { class: 'icon-btn', title: 'Remover do grupo',
+          onclick: async () => { if (confirm(`Remover ${m.displayName}?`)) { await api.removeMember(chat.id, m.id); setTimeout(renderMembers, 150); } } }, '✕'));
+      }
+      members.append(el('div', { class: 'user-result' },
+        avatar,
+        el('div', { class: 'user-result-body' },
+          el('div', { class: 'user-result-name' }, m.displayName + (m.id === state.me.id ? ' (você)' : '')),
+          el('div', { class: 'user-result-sub' }, m.role === 'admin' ? 'Admin · @' + m.username : '@' + m.username)),
+        ...actions));
+    }
+  }
+  renderMembers();
+  // Refresh the member list when the server pushes group changes.
+  const refresh = () => setTimeout(renderMembers, 50);
+  state.socket.on('chat:update', refresh);
+
+  const addBtn = (isGroup && iAmAdmin)
+    ? el('button', { class: 'btn-primary', style: 'margin-top:12px', onclick: () => addMembersModal(chat.id, () => setTimeout(renderMembers, 200)) }, '+ Adicionar participantes')
+    : '';
+
+  const leave = el('button', { class: 'btn-primary', style: 'background:var(--danger);margin-top:16px', onclick: async () => {
     await api.leaveChat(chat.id);
     state.chats.delete(chat.id);
     state.activeChatId = null;
@@ -1050,17 +1140,53 @@ function showChatInfo() {
     $('#app').classList.remove('in-chat');
     renderChatList();
     backdrop.remove();
-  } }, chat.type === 'group' ? 'Sair do grupo' : 'Apagar conversa');
+  } }, isGroup ? 'Sair do grupo' : 'Apagar conversa');
 
   const body = el('div', { class: 'modal-body' },
     big,
-    el('h3', { style: 'text-align:center;margin-bottom:6px' }, chat.title),
+    titleNode,
     el('p', { class: 'auth-hint' }, presenceText(chat)),
-    el('div', { class: 'field-label', style: 'margin-top:16px' },
-      chat.type === 'group' ? `${chat.members.length} participantes` : 'Contato'),
+    el('div', { class: 'field-label', style: 'margin-top:16px' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
     members,
-    el('div', { style: 'margin-top:16px' }, leave));
-  const backdrop = modalShell(chat.type === 'group' ? 'Dados do grupo' : 'Dados do contato', body);
+    addBtn,
+    leave);
+  const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);
+  // Detach the live refresh listener when the modal closes.
+  const origRemove = backdrop.remove.bind(backdrop);
+  backdrop.remove = () => { state.socket.off('chat:update', refresh); origRemove(); };
+}
+
+// Modal to pick and add participants to an existing group.
+function addMembersModal(chatId, onDone) {
+  const selected = new Map();
+  const search = el('input', { type: 'text', placeholder: 'Buscar pessoas' });
+  const results = el('div', {});
+  const chat = state.chats.get(chatId);
+  const existing = new Set((chat ? chat.members : []).map((m) => m.id));
+  let timer;
+  search.addEventListener('input', () => {
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      results.innerHTML = '';
+      if (search.value.trim().length < 2) return;
+      const { users } = await api.searchUsers(search.value.trim());
+      for (const u of users) {
+        if (existing.has(u.id)) continue;
+        results.append(userResultRow(u, { selectable: true, selected: selected.has(u.id),
+          onToggle: () => { selected.has(u.id) ? selected.delete(u.id) : selected.set(u.id, u); search.dispatchEvent(new Event('input')); } }));
+      }
+    }, 250);
+  });
+  const add = el('button', { class: 'btn-primary', onclick: async () => {
+    if (!selected.size) return;
+    await api.addMembers(chatId, [...selected.keys()]);
+    backdrop.remove();
+    onDone && onDone();
+  } }, 'Adicionar');
+  const body = el('div', { class: 'modal-body' }, search, results);
+  const footer = el('div', { class: 'modal-footer' }, add);
+  const backdrop = modalShell('Adicionar participantes', body, footer);
+  setTimeout(() => search.focus(), 50);
 }
 
 // ------------------------------------------------------------------ chrome

@@ -5,11 +5,24 @@ const db = require('../db');
 const { requireAuth } = require('../auth-middleware');
 const { id, now } = require('../util');
 const {
-  isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, serializeMessage,
+  isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, serializeMessage, getMemberIds,
 } = require('../chat-service');
+const bus = require('../bus');
 
 const router = express.Router();
 router.use(requireAuth);
+
+// Helper: load a group and the caller's membership, enforcing admin if required.
+function loadGroup(req, res, { requireAdmin } = {}) {
+  const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
+  if (!chat || chat.type !== 'group') { res.status(404).json({ error: 'grupo não encontrado' }); return null; }
+  const me = db
+    .prepare('SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?')
+    .get(req.params.id, req.user.id);
+  if (!me) { res.status(403).json({ error: 'forbidden' }); return null; }
+  if (requireAdmin && me.role !== 'admin') { res.status(403).json({ error: 'apenas admins' }); return null; }
+  return { chat, me };
+}
 
 // List all chats for the current user.
 router.get('/', (req, res) => {
@@ -82,31 +95,103 @@ router.get('/:id/messages', (req, res) => {
   res.json({ messages: rows.reverse().map(serializeMessage) });
 });
 
-// Add members to a group (admins only).
-router.post('/:id/members', (req, res) => {
-  const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
-  if (!chat || chat.type !== 'group') return res.status(404).json({ error: 'grupo não encontrado' });
-  const me = db
-    .prepare('SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?')
-    .get(req.params.id, req.user.id);
-  if (!me || me.role !== 'admin') return res.status(403).json({ error: 'apenas admins' });
-
-  const { memberIds } = req.body || {};
-  const ins = db.prepare(
-    'INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
-  );
-  for (const m of memberIds || []) {
-    if (db.prepare('SELECT 1 FROM users WHERE id = ?').get(m)) ins.run(req.params.id, m, 'member', now());
+// Rename a group or change its photo (admins only).
+router.patch('/:id', (req, res) => {
+  const ctx = loadGroup(req, res, { requireAdmin: true });
+  if (!ctx) return;
+  const { name, avatarUrl } = req.body || {};
+  let renamed = false;
+  if (typeof name === 'string' && name.trim() && name.trim() !== ctx.chat.name) {
+    db.prepare('UPDATE chats SET name = ? WHERE id = ?').run(name.trim(), req.params.id);
+    renamed = true;
+  }
+  if (typeof avatarUrl === 'string') {
+    db.prepare('UPDATE chats SET avatar_url = ? WHERE id = ?').run(avatarUrl, req.params.id);
+  }
+  if (renamed) {
+    bus.systemMessage(req.params.id, `${req.user.display_name} alterou o nome do grupo para "${name.trim()}"`, req.user.id);
+  } else {
+    bus.pushChatUpdate(req.params.id);
   }
   res.json({ chat: getChatSummary(req.params.id, req.user.id) });
 });
 
-// Leave a chat.
-router.post('/:id/leave', (req, res) => {
-  db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(
-    req.params.id,
-    req.user.id
+// Add members to a group (admins only).
+router.post('/:id/members', (req, res) => {
+  const ctx = loadGroup(req, res, { requireAdmin: true });
+  if (!ctx) return;
+  const { memberIds } = req.body || {};
+  const ins = db.prepare(
+    'INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
   );
+  const added = [];
+  for (const m of memberIds || []) {
+    const u = db.prepare('SELECT display_name FROM users WHERE id = ?').get(m);
+    if (u && !isMember(req.params.id, m)) { ins.run(req.params.id, m, 'member', now()); added.push(u.display_name); }
+  }
+  if (added.length) {
+    bus.systemMessage(req.params.id, `${req.user.display_name} adicionou ${added.join(', ')}`, req.user.id);
+  }
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+});
+
+// Remove a member from a group (admins only).
+router.delete('/:id/members/:userId', (req, res) => {
+  const ctx = loadGroup(req, res, { requireAdmin: true });
+  if (!ctx) return;
+  const target = req.params.userId;
+  if (target === req.user.id) return res.status(400).json({ error: 'use sair do grupo' });
+  const u = db.prepare('SELECT display_name FROM users WHERE id = ?').get(target);
+  db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(req.params.id, target);
+  if (u) bus.systemMessage(req.params.id, `${req.user.display_name} removeu ${u.display_name}`, req.user.id);
+  bus.pushChatRemoved(req.params.id, target);
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+});
+
+// Promote/demote a member (admins only).
+router.post('/:id/members/:userId/role', (req, res) => {
+  const ctx = loadGroup(req, res, { requireAdmin: true });
+  if (!ctx) return;
+  const { role } = req.body || {};
+  if (!['admin', 'member'].includes(role)) return res.status(400).json({ error: 'papel inválido' });
+  if (!isMember(req.params.id, req.params.userId)) return res.status(404).json({ error: 'não é membro' });
+  db.prepare('UPDATE chat_members SET role = ? WHERE chat_id = ? AND user_id = ?')
+    .run(role, req.params.id, req.params.userId);
+  const u = db.prepare('SELECT display_name FROM users WHERE id = ?').get(req.params.userId);
+  if (u) {
+    bus.systemMessage(req.params.id,
+      role === 'admin' ? `${u.display_name} agora é admin` : `${u.display_name} não é mais admin`,
+      req.user.id);
+  }
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+});
+
+// Leave a chat. If the last admin of a group leaves, promote the oldest member.
+router.post('/:id/leave', (req, res) => {
+  const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
+  const wasAdmin = db
+    .prepare('SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?')
+    .get(req.params.id, req.user.id);
+  db.prepare('DELETE FROM chat_members WHERE chat_id = ? AND user_id = ?').run(req.params.id, req.user.id);
+
+  if (chat && chat.type === 'group') {
+    bus.systemMessage(req.params.id, `${req.user.display_name} saiu do grupo`, req.user.id);
+    const remaining = getMemberIds(req.params.id);
+    const stillAdmin = db
+      .prepare("SELECT 1 FROM chat_members WHERE chat_id = ? AND role = 'admin' LIMIT 1")
+      .get(req.params.id);
+    if (remaining.length && !stillAdmin) {
+      const oldest = db
+        .prepare('SELECT user_id FROM chat_members WHERE chat_id = ? ORDER BY joined_at LIMIT 1')
+        .get(req.params.id);
+      if (oldest) {
+        db.prepare("UPDATE chat_members SET role = 'admin' WHERE chat_id = ? AND user_id = ?")
+          .run(req.params.id, oldest.user_id);
+        bus.pushChatUpdate(req.params.id);
+      }
+    }
+  }
+  bus.pushChatRemoved(req.params.id, req.user.id);
   res.json({ ok: true });
 });
 

@@ -48,6 +48,10 @@ export const api = {
   getMessages: (id, before) =>
     request('GET', `/chats/${id}/messages${before ? `?before=${before}` : ''}`),
   leaveChat: (id) => request('POST', `/chats/${id}/leave`),
+  updateChat: (id, data) => request('PATCH', `/chats/${id}`, data),
+  addMembers: (id, memberIds) => request('POST', `/chats/${id}/members`, { memberIds }),
+  removeMember: (id, userId) => request('DELETE', `/chats/${id}/members/${userId}`),
+  setMemberRole: (id, userId, role) => request('POST', `/chats/${id}/members/${userId}/role`, { role }),
 
   async upload(file) {
     const fd = new FormData();

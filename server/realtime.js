@@ -16,6 +16,7 @@ function isOnline(userId) {
 
 function setup(httpServer) {
   const io = new Server(httpServer, { maxHttpBufferSize: 1e7 });
+  require('./bus').setIo(io); // let REST routes push realtime updates
 
   // Authenticate every socket from its handshake token.
   io.use((socket, next) => {
