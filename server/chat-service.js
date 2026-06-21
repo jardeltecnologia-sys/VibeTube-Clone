@@ -16,6 +16,20 @@ function isBlockedEither(a, b) {
   return iBlocked(a, b) || iBlocked(b, a);
 }
 
+// Users who share at least one chat with `userId` (the natural "contacts"
+// graph), excluding anyone with a block relationship.
+function contactsOf(userId) {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT cm2.user_id AS uid
+       FROM chat_members cm1
+       JOIN chat_members cm2 ON cm2.chat_id = cm1.chat_id AND cm2.user_id != cm1.user_id
+       WHERE cm1.user_id = ?`
+    )
+    .all(userId);
+  return rows.map((r) => r.uid).filter((uid) => !isBlockedEither(userId, uid));
+}
+
 function isMember(chatId, userId) {
   return Boolean(
     db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId)
@@ -192,4 +206,5 @@ module.exports = {
   iBlocked,
   blockRow,
   isBlockedEither,
+  contactsOf,
 };

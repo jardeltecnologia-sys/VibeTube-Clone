@@ -256,6 +256,8 @@ function connectSocket() {
     renderChatList();
   });
 
+  socket.on('status:update', () => { refreshStatusIndicator(); });
+
   // Mesh signaling relayed through the server.
   socket.on('mesh:signal', ({ from, signal }) => {
     if (state.mesh) state.mesh.onSignal(from, signal);
@@ -1448,6 +1450,193 @@ function addMembersModal(chatId, onDone) {
   setTimeout(() => search.focus(), 50);
 }
 
+// ------------------------------------------------------------------ status / stories
+const STATUS_COLORS = ['#075E54', '#7E57C2', '#C2185B', '#1565C0', '#2E7D32', '#EF6C00', '#37474F'];
+
+async function refreshStatusIndicator() {
+  try {
+    const feed = await api.statusFeed();
+    const unviewed = feed.contacts.some((g) => g.hasUnviewed);
+    $('#status-btn').classList.toggle('has-status', unviewed);
+  } catch { /* ignore */ }
+}
+
+async function openStatusPanel() {
+  let feed;
+  try { feed = await api.statusFeed(); } catch (e) { return toast('Falha ao carregar status'); }
+
+  const body = el('div', { class: 'modal-body' });
+
+  // My status row.
+  const myAvatar = el('span', { class: 'avatar' });
+  avatarBg(myAvatar, state.me.avatarUrl, state.me.displayName);
+  const myRow = el('div', { class: 'user-result' },
+    el('span', { class: `status-ring${feed.me.length ? ' seen' : ''}` }, myAvatar),
+    el('div', { class: 'user-result-body' },
+      el('div', { class: 'user-result-name' }, 'Meu status'),
+      el('div', { class: 'user-result-sub' },
+        feed.me.length ? `${feed.me.length} atualização(ões) · toque para ver` : 'Toque para adicionar')));
+  myRow.onclick = () => {
+    backdrop.remove();
+    if (feed.me.length) viewStatuses(feed.me, state.me, true);
+    else statusComposer();
+  };
+  const addBtn = el('button', { class: 'icon-btn', title: 'Adicionar status', style: 'font-size:20px',
+    onclick: (e) => { e.stopPropagation(); backdrop.remove(); statusComposer(); } }, '＋');
+  myRow.append(addBtn);
+  body.append(myRow);
+
+  // Contacts' statuses.
+  if (feed.contacts.length) {
+    body.append(el('div', { class: 'field-label', style: 'margin-top:14px' }, 'Atualizações recentes'));
+    for (const g of feed.contacts) {
+      const av = el('span', { class: 'avatar' });
+      avatarBg(av, g.user.avatarUrl, g.user.displayName);
+      body.append(el('div', { class: 'user-result', onclick: () => { backdrop.remove(); viewStatuses(g.statuses, g.user, false); } },
+        el('span', { class: `status-ring${g.hasUnviewed ? '' : ' seen'}` }, av),
+        el('div', { class: 'user-result-body' },
+          el('div', { class: 'user-result-name' }, g.user.displayName),
+          el('div', { class: 'user-result-sub' }, `${g.statuses.length} atualização(ões) · ${fmtTime(g.latestAt)}`))));
+    }
+  } else {
+    body.append(el('p', { class: 'auth-hint', style: 'margin-top:14px' }, 'Nenhuma atualização de contatos.'));
+  }
+
+  const backdrop = modalShell('Status', body);
+}
+
+function statusComposer() {
+  let chosenColor = STATUS_COLORS[0];
+  let pendingImage = null;
+
+  const preview = el('div', { class: 'status-compose-preview', style: `background:${chosenColor}` });
+  const textInput = el('textarea', { class: 'status-compose-text', placeholder: 'Digite um status', rows: '4' });
+  textInput.oninput = () => { preview.textContent = textInput.value; };
+  preview.append(textInput);
+
+  const swatches = el('div', { class: 'status-swatches' });
+  for (const c of STATUS_COLORS) {
+    swatches.append(el('button', { class: 'swatch', style: `background:${c}`,
+      onclick: () => { chosenColor = c; preview.style.background = c; if (pendingImage) { pendingImage = null; preview.style.backgroundImage = 'none'; } } }));
+  }
+
+  const fileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  fileInput.onchange = async () => {
+    const f = fileInput.files[0];
+    if (!f) return;
+    try {
+      const up = await api.upload(f);
+      pendingImage = up.url;
+      preview.style.backgroundImage = `url(${up.url})`;
+      preview.style.backgroundSize = 'cover';
+      preview.style.backgroundPosition = 'center';
+      textInput.placeholder = 'Legenda (opcional)';
+    } catch (err) { toast('Falha no upload: ' + err.message); }
+  };
+
+  const photoBtn = el('button', { class: 'icon-btn', title: 'Foto', style: 'font-size:20px', onclick: () => fileInput.click() }, '📷');
+  const post = el('button', { class: 'btn-primary', onclick: async () => {
+    try {
+      if (pendingImage) {
+        await api.postStatus({ type: 'image', mediaUrl: pendingImage, body: textInput.value.trim() || undefined });
+      } else {
+        if (!textInput.value.trim()) return toast('Escreva algo ou escolha uma foto');
+        await api.postStatus({ type: 'text', body: textInput.value.trim(), bgColor: chosenColor });
+      }
+      backdrop.remove();
+      toast('Status publicado');
+      refreshStatusIndicator();
+    } catch (err) { toast('Falha: ' + err.message); }
+  } }, 'Publicar');
+
+  const body = el('div', { class: 'modal-body' }, preview,
+    el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:10px' }, photoBtn, swatches, fileInput));
+  const footer = el('div', { class: 'modal-footer' }, post);
+  const backdrop = modalShell('Adicionar status', body, footer);
+  setTimeout(() => textInput.focus(), 50);
+}
+
+// Full-screen status viewer with progress bars and auto-advance.
+function viewStatuses(statuses, user, isMine) {
+  let idx = 0;
+  let timer = null;
+  const overlay = el('div', { class: 'status-viewer' });
+
+  const bars = el('div', { class: 'status-bars' });
+  const barEls = statuses.map(() => {
+    const fill = el('span', { class: 'status-bar-fill' });
+    bars.append(el('span', { class: 'status-bar' }, fill));
+    return fill;
+  });
+
+  const head = el('div', { class: 'status-viewer-head' });
+  const av = el('span', { class: 'avatar sm' });
+  avatarBg(av, user.avatarUrl, user.displayName);
+  const headText = el('div', {}, el('div', { style: 'font-weight:600' }, isMine ? 'Meu status' : user.displayName), el('div', { class: 'status-time' }));
+  const closeBtn = el('button', { class: 'icon-btn', style: 'color:#fff;font-size:22px;margin-left:auto', onclick: () => close() }, '✕');
+  head.append(av, headText, closeBtn);
+
+  const content = el('div', { class: 'status-viewer-content' });
+  const footer = el('div', { class: 'status-viewer-foot' });
+
+  overlay.append(bars, head, content, footer);
+  document.body.append(overlay);
+
+  function close() { if (timer) clearTimeout(timer); overlay.remove(); refreshStatusIndicator(); openStatusPanel(); }
+
+  function render() {
+    const s = statuses[idx];
+    barEls.forEach((b, i) => { b.style.width = i < idx ? '100%' : (i === idx ? '0%' : '0%'); });
+    headText.querySelector('.status-time').textContent = fmtTime(s.createdAt);
+    content.innerHTML = '';
+    content.style.background = s.bgColor || '#000';
+    content.style.backgroundImage = '';
+    if (s.type === 'image' && s.mediaUrl) {
+      content.style.background = '#000';
+      content.append(el('img', { class: 'status-img', src: s.mediaUrl }));
+      if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
+    } else {
+      content.append(el('div', { class: 'status-text' }, s.body || ''));
+    }
+    footer.innerHTML = '';
+    if (isMine) {
+      footer.append(el('button', { class: 'status-viewers-btn', onclick: () => showStatusViewers(s.id) }, `👁 ${s.viewCount || 0}`));
+      footer.append(el('button', { class: 'status-del-btn', onclick: async () => {
+        await api.deleteStatus(s.id); toast('Status apagado'); close();
+      } }, '🗑'));
+    } else {
+      api.viewStatus(s.id).catch(() => {});
+    }
+    // animate progress then advance
+    requestAnimationFrame(() => { barEls[idx].style.transition = 'width 4.5s linear'; barEls[idx].style.width = '100%'; });
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(next, 4500);
+  }
+  function next() { if (idx < statuses.length - 1) { idx++; barEls[idx - 1].style.transition = 'none'; render(); } else close(); }
+  function prev() { if (idx > 0) { barEls[idx].style.transition = 'none'; barEls[idx].style.width = '0%'; idx--; barEls[idx].style.transition = 'none'; barEls[idx].style.width = '0%'; render(); } }
+
+  content.onclick = (e) => { (e.clientX < window.innerWidth / 3) ? prev() : next(); };
+  render();
+}
+
+async function showStatusViewers(statusId) {
+  try {
+    const { viewers } = await api.statusViewers(statusId);
+    const body = el('div', { class: 'modal-body' },
+      el('div', { class: 'field-label' }, `${viewers.length} visualização(ões)`));
+    for (const v of viewers) {
+      const av = el('span', { class: 'avatar sm' });
+      avatarBg(av, v.avatarUrl, v.displayName);
+      body.append(el('div', { class: 'user-result' }, av,
+        el('div', { class: 'user-result-body' },
+          el('div', { class: 'user-result-name' }, v.displayName),
+          el('div', { class: 'user-result-sub' }, fmtTime(v.viewedAt)))));
+    }
+    if (!viewers.length) body.append(el('p', { class: 'auth-hint' }, 'Ninguém viu ainda.'));
+    modalShell('Visualizações', body);
+  } catch { toast('Falha ao carregar visualizações'); }
+}
+
 // ------------------------------------------------------------------ chrome
 function refreshMyAvatar() {
   avatarBg($('#my-avatar-btn'), state.me.avatarUrl, state.me.displayName);
@@ -1541,8 +1730,10 @@ async function startApp(user) {
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;
+  $('#status-btn').onclick = openStatusPanel;
 
   setupPush();
+  refreshStatusIndicator();
 }
 
 async function boot() {

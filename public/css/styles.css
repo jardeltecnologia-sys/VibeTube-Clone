@@ -353,6 +353,41 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .call-btn.accept { background: var(--accent); }
 .call-btn.hangup { background: var(--danger); }
 
+/* ---------- STATUS / STORIES ---------- */
+.net-indicator.has-status, #status-btn.has-status { color: var(--accent); }
+#status-btn.has-status { position: relative; }
+.status-ring { display: inline-flex; border-radius: 50%; padding: 2px;
+  background: var(--accent); }
+.status-ring.seen { background: var(--panel-3); }
+.status-ring .avatar { border: 2px solid var(--panel); }
+
+.status-compose-preview { min-height: 200px; border-radius: 12px; display: flex;
+  align-items: center; justify-content: center; padding: 16px; color: #fff; }
+.status-compose-text { background: transparent; border: none; outline: none; color: #fff;
+  text-align: center; font-size: 22px; width: 100%; resize: none; }
+.status-compose-text::placeholder { color: rgba(255,255,255,.7); }
+.status-swatches { display: flex; gap: 6px; }
+.swatch { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,.3); }
+
+.status-viewer { position: fixed; inset: 0; z-index: 200; background: #000;
+  display: flex; flex-direction: column; }
+.status-bars { display: flex; gap: 4px; padding: 10px 12px 4px; }
+.status-bar { flex: 1; height: 3px; background: rgba(255,255,255,.3); border-radius: 2px; overflow: hidden; }
+.status-bar-fill { display: block; height: 100%; width: 0; background: #fff; }
+.status-viewer-head { display: flex; align-items: center; gap: 10px; padding: 6px 14px; color: #fff; }
+.status-time { font-size: 12px; color: rgba(255,255,255,.7); }
+.status-viewer-content { flex: 1; display: flex; align-items: center; justify-content: center;
+  position: relative; overflow: hidden; cursor: pointer; }
+.status-text { color: #fff; font-size: 26px; text-align: center; padding: 24px; white-space: pre-wrap; }
+.status-img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.status-caption { position: absolute; bottom: 24px; left: 0; right: 0; text-align: center;
+  color: #fff; padding: 0 20px; text-shadow: 0 1px 4px rgba(0,0,0,.7); }
+.status-viewer-foot { display: flex; align-items: center; justify-content: center; gap: 14px;
+  padding: 14px; }
+.status-viewers-btn, .status-del-btn { color: #fff; background: rgba(255,255,255,.18);
+  padding: 8px 18px; border-radius: 20px; font-size: 15px; }
+.status-viewers-btn:hover, .status-del-btn:hover { background: rgba(255,255,255,.3); }
+
 .toast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
   background: var(--panel-3); color: var(--text); padding: 12px 20px; border-radius: 24px;
   font-size: 14px; z-index: 100; box-shadow: 0 6px 24px rgba(0,0,0,.4); }

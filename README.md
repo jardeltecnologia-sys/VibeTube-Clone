@@ -46,6 +46,9 @@ de apagão ou queda do servidor central.
   remove as mensagens vencidas e avisa os participantes em tempo real.
 - **Bloquear contatos**: o bloqueado não chega até você (mensagens ocultas e
   presença escondida), e ele vê a mensagem como "enviada" sem saber do bloqueio.
+- **Status / Stories**: posts de texto ou imagem que somem em 24h, visíveis aos
+  seus contatos (quem compartilha conversa), com visualizador em tela cheia e
+  lista de quem viu.
 - **Notificações push (Web Push)**: receba mensagens com o app fechado. Respeita
   silenciar/bloquear e não revela o conteúdo de mensagens cifradas na notificação.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).

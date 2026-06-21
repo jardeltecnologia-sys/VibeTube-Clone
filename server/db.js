@@ -98,6 +98,28 @@ CREATE TABLE IF NOT EXISTS blocks (
   FOREIGN KEY (blocker_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (blocked_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS statuses (
+  id         TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  type       TEXT NOT NULL DEFAULT 'text',  -- 'text' | 'image'
+  body       TEXT,                          -- text content or image caption
+  media_url  TEXT,
+  bg_color   TEXT,                          -- background color for text statuses
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,              -- created_at + 24h
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS status_views (
+  status_id TEXT NOT NULL,
+  viewer_id TEXT NOT NULL,
+  viewed_at INTEGER NOT NULL,
+  PRIMARY KEY (status_id, viewer_id),
+  FOREIGN KEY (status_id) REFERENCES statuses(id) ON DELETE CASCADE,
+  FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_statuses_user ON statuses(user_id, expires_at);
 `);
 
 // Migrations for databases created before these columns existed.

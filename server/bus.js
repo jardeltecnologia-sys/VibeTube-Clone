@@ -5,7 +5,7 @@
 
 const db = require('./db');
 const { id, now } = require('./util');
-const { getChatSummary, getMemberIds, serializeMessage } = require('./chat-service');
+const { getChatSummary, getMemberIds, serializeMessage, contactsOf } = require('./chat-service');
 
 let io = null;
 function setIo(instance) { io = instance; }
@@ -22,6 +22,14 @@ function pushChatUpdate(chatId) {
 function pushChatRemoved(chatId, userId) {
   if (!io) return;
   io.to(`user:${userId}`).emit('chat:removed', { chatId });
+}
+
+// Notify a user's contacts that their status feed changed.
+function pushStatusUpdate(userId) {
+  if (!io) return;
+  for (const contactId of contactsOf(userId)) {
+    io.to(`user:${contactId}`).emit('status:update', { userId });
+  }
 }
 
 // Insert a system message and broadcast it to every member.
@@ -42,4 +50,4 @@ function systemMessage(chatId, body, senderId) {
   return message;
 }
 
-module.exports = { setIo, pushChatUpdate, pushChatRemoved, systemMessage };
+module.exports = { setIo, pushChatUpdate, pushChatRemoved, pushStatusUpdate, systemMessage };

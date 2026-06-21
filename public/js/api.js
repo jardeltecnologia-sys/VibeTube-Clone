@@ -61,6 +61,11 @@ export const api = {
   searchMessages: (q, chatId) =>
     request('GET', `/search/messages?q=${encodeURIComponent(q)}${chatId ? `&chatId=${chatId}` : ''}`),
   setDisappearing: (id, seconds) => request('POST', `/chats/${id}/disappearing`, { seconds }),
+  statusFeed: () => request('GET', '/status'),
+  postStatus: (d) => request('POST', '/status', d),
+  viewStatus: (id) => request('POST', `/status/${id}/view`),
+  statusViewers: (id) => request('GET', `/status/${id}/viewers`),
+  deleteStatus: (id) => request('DELETE', `/status/${id}`),
   pushVapid: () => request('GET', '/push/vapid'),
   pushSubscribe: (subscription) => request('POST', '/push/subscribe', { subscription }),
   pushUnsubscribe: (endpoint) => request('POST', '/push/unsubscribe', { endpoint }),

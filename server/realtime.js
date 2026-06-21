@@ -132,6 +132,8 @@ function setup(httpServer) {
 
   // Periodically delete expired (disappearing) messages and notify members.
   function sweepExpired() {
+    // Expired statuses (24h stories) are just removed; no notification needed.
+    db.prepare('DELETE FROM statuses WHERE expires_at <= ?').run(now());
     const expired = db
       .prepare('SELECT id, chat_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?')
       .all(now());
