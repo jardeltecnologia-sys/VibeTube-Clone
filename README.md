@@ -79,6 +79,13 @@ Acesse **http://localhost:3000**. Crie uma conta com e-mail e comece a conversar
 Para testar conversas reais, abra uma segunda aba/navegador anônimo e cadastre
 outro usuário.
 
+### Publicar em HTTPS
+
+Veja **[DEPLOY.md](DEPLOY.md)** — deploy em um passo com TLS automático no
+**Render** ou **Fly.io** (HTTPS grátis), ou self-host em VPS com **Docker
+Compose + Caddy** (Let's Encrypt automático). Arquivos prontos: `Dockerfile`,
+`docker-compose.yml`, `Caddyfile`, `render.yaml`, `fly.toml`, `Procfile`.
+
 ### Instalar como aplicativo
 
 - **PWA**: abra o site e use "Instalar app" / "Adicionar à tela inicial".

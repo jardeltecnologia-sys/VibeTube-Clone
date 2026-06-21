@@ -1,0 +1,10 @@
+node_modules
+desktop/node_modules
+desktop/release
+data
+uploads
+.git
+.env
+*.log
+npm-debug.log*
+.DS_Store

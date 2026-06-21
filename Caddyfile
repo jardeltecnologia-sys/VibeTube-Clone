@@ -1,0 +1,6 @@
+# Automatic HTTPS reverse proxy for SpeedVox.
+# {$DOMAIN} comes from the DOMAIN env var (defaults to localhost for local TLS).
+{$DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy app:3000
+}

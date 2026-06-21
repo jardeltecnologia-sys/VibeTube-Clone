@@ -1,0 +1,43 @@
+# Self-hosting on a VPS with automatic HTTPS (Let's Encrypt via Caddy).
+#
+#   1. Point a DNS A record (e.g. chat.seudominio.com) to the server's IP.
+#   2. Set env vars and run:
+#        DOMAIN=chat.seudominio.com JWT_SECRET="$(openssl rand -hex 32)" \
+#        PUBLIC_URL=https://chat.seudominio.com docker compose up -d --build
+#   Caddy obtains and renews TLS certificates automatically.
+
+services:
+  app:
+    build: .
+    environment:
+      - PORT=3000
+      - JWT_SECRET=${JWT_SECRET:-change-me-please}
+      - PUBLIC_URL=${PUBLIC_URL:-https://localhost}
+      # Optional: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, VAPID_*, TURN_*
+    volumes:
+      - speedvox-data:/app/data
+      - speedvox-uploads:/app/uploads
+    expose:
+      - "3000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  speedvox-data:
+  speedvox-uploads:
+  caddy-data:
+  caddy-config:

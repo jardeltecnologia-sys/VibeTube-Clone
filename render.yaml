@@ -1,0 +1,22 @@
+# Deploy to Render (https://render.com) — gives a free https://*.onrender.com URL.
+# Push this repo to GitHub, then "New + > Blueprint" and point it here.
+services:
+  - type: web
+    name: speedvox
+    runtime: docker
+    plan: free
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: JWT_SECRET
+        generateValue: true
+      # After the first deploy, set PUBLIC_URL to the assigned https URL
+      # (Settings > Environment) if you enable Google login.
+      # - key: PUBLIC_URL
+      #   value: https://speedvox.onrender.com
+    # NOTE: Render's free plan has an EPHEMERAL filesystem — the SQLite database
+    # and uploads reset on each deploy/restart. For persistence, upgrade and add
+    # a Disk mounted at /app/data (and /app/uploads), or use the Docker Compose
+    # / Fly setups which include volumes.
