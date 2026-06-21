@@ -289,6 +289,8 @@ input, textarea { font-family: inherit; font-size: 15px; }
   display: flex; align-items: center; justify-content: center; font-size: 42px; font-weight: 700;
   background: var(--accent) center/cover no-repeat; color: #04130e; }
 .field-label { font-size: 13px; color: var(--accent); margin-bottom: 4px; }
+.select-input { width: 100%; background: var(--panel-2); border: none; border-radius: 10px;
+  padding: 11px 14px; color: var(--text); outline: none; }
 .field-row { margin-bottom: 16px; }
 
 /* ---------- HEADER ACTIONS / VOICE ---------- */

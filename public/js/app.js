@@ -213,6 +213,16 @@ function connectSocket() {
     renderChatList();
   });
 
+  socket.on('message:expired', ({ messageId, chatId }) => {
+    const list = state.messages.get(chatId);
+    if (list) {
+      const idx = list.findIndex((x) => x.id === messageId);
+      if (idx !== -1) list.splice(idx, 1);
+    }
+    if (chatId === state.activeChatId) renderMessages(true);
+    renderChatList();
+  });
+
   socket.on('message:edited', ({ messageId, chatId, body, encrypted, editedAt }) => {
     const list = state.messages.get(chatId);
     const m = list && list.find((x) => x.id === messageId);
@@ -517,7 +527,8 @@ function renderChatHeader(chat) {
       : 'digitando…';
     sub.classList.add('typing');
   } else {
-    sub.textContent = (chatIsEncrypted(chat) ? '🔒 ' : '') + presenceText(chat);
+    const prefix = (chatIsEncrypted(chat) ? '🔒 ' : '') + (chat.disappearingTimer ? '⏱ ' : '');
+    sub.textContent = prefix + presenceText(chat);
     sub.classList.remove('typing');
   }
 }
@@ -1167,6 +1178,30 @@ function meshToggleRow() {
   return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
 }
 
+// Dropdown to choose the disappearing-messages timer for a chat.
+function disappearingRow(chat) {
+  const options = [
+    { v: 0, label: 'Desligado' },
+    { v: 86400, label: '24 horas' },
+    { v: 7 * 86400, label: '7 dias' },
+    { v: 90 * 86400, label: '90 dias' },
+  ];
+  const select = el('select', { class: 'select-input' });
+  for (const o of options) {
+    const opt = el('option', { value: String(o.v) }, o.label);
+    if (o.v === (chat.disappearingTimer || 0)) opt.setAttribute('selected', '');
+    select.append(opt);
+  }
+  select.onchange = async () => {
+    const { chat: updated } = await api.setDisappearing(chat.id, parseInt(select.value, 10));
+    state.chats.set(updated.id, updated);
+    renderChatHeader(updated);
+    toast(parseInt(select.value, 10) ? 'Mensagens temporárias ativadas' : 'Mensagens temporárias desativadas');
+  };
+  return el('div', { class: 'field-row' },
+    el('div', { class: 'field-label' }, '⏱ Mensagens temporárias'), select);
+}
+
 function showChatInfo() {
   const chat = state.chats.get(state.activeChatId);
   if (!chat) return;
@@ -1245,7 +1280,8 @@ function showChatInfo() {
     big,
     titleNode,
     el('p', { class: 'auth-hint' }, presenceText(chat)),
-    el('div', { class: 'field-label', style: 'margin-top:16px' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
+    el('div', { style: 'margin-top:16px' }, disappearingRow(chat)),
+    el('div', { class: 'field-label' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
     members,
     addBtn,
     leave);

@@ -52,6 +52,7 @@ function serializeMessage(row) {
     replyTo: row.reply_to,
     encrypted: Boolean(row.encrypted),
     forwarded: Boolean(row.forwarded),
+    expiresAt: row.expires_at || null,
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deleted: Boolean(row.deleted),
@@ -106,6 +107,7 @@ function getChatSummary(chatId, userId) {
     pinned: Boolean(membership.pinned),
     mutedUntil: membership.muted_until || 0,
     muted: (membership.muted_until || 0) > Date.now(),
+    disappearingTimer: chat.disappearing_timer || 0,
   };
 }
 

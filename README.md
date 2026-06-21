@@ -40,6 +40,8 @@ de apagão ou queda do servidor central.
 - **Busca de mensagens**: o servidor busca no texto claro (grupos e mensagens
   não cifradas); o cliente complementa buscando localmente nas mensagens E2EE já
   decifradas — o ciphertext nunca é exposto na busca.
+- **Mensagens temporárias**: timer por conversa (24h / 7d / 90d); o servidor
+  remove as mensagens vencidas e avisa os participantes em tempo real.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
 - **Modo mesh** (experimental) — canais WebRTC peer-to-peer entre usuários.
 
@@ -66,6 +68,7 @@ outro usuário.
 | `PORT` | Porta HTTP (padrão `3000`). |
 | `PUBLIC_URL` | URL pública do servidor (usada no OAuth e em links de mídia). |
 | `JWT_SECRET` | Segredo para assinar os tokens de sessão. **Troque em produção.** |
+| `SWEEP_MS` | Intervalo (ms) da varredura de mensagens temporárias vencidas (padrão `15000`). |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Credenciais do Google Sign-In (opcional). |
 
 ### Ativando o login com Google

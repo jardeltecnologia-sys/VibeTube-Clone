@@ -42,6 +42,8 @@ const config = {
   },
   dataDir: path.join(__dirname, '..', 'data'),
   uploadDir: path.join(__dirname, '..', 'uploads'),
+  // How often to sweep expired (disappearing) messages.
+  sweepMs: parseInt(process.env.SWEEP_MS || '15000', 10),
 };
 
 module.exports = config;

@@ -89,11 +89,32 @@ router.get('/:id/messages', (req, res) => {
   const rows = db
     .prepare(
       `SELECT * FROM messages WHERE chat_id = ? AND created_at < ?
+         AND (expires_at IS NULL OR expires_at > ?)
        ORDER BY created_at DESC LIMIT ?`
     )
-    .all(req.params.id, before, limit);
+    .all(req.params.id, before, now(), limit);
   res.json({ messages: rows.reverse().map(serializeMessage) });
 });
+
+// Set the disappearing-messages timer for a chat (any participant). 0 = off.
+router.post('/:id/disappearing', (req, res) => {
+  if (!isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });
+  let seconds = parseInt(req.body && req.body.seconds, 10);
+  if (!Number.isFinite(seconds) || seconds < 0) seconds = 0;
+  seconds = Math.min(seconds, 365 * 24 * 3600); // cap at 1 year
+  db.prepare('UPDATE chats SET disappearing_timer = ? WHERE id = ?').run(seconds, req.params.id);
+  const label = seconds === 0 ? 'desativou as mensagens temporárias'
+    : `ativou mensagens temporárias (${humanizeDuration(seconds)})`;
+  bus.systemMessage(req.params.id, `${req.user.display_name} ${label}`, req.user.id);
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+});
+
+function humanizeDuration(seconds) {
+  if (seconds % 86400 === 0) return `${seconds / 86400} dia(s)`;
+  if (seconds % 3600 === 0) return `${seconds / 3600} hora(s)`;
+  if (seconds % 60 === 0) return `${seconds / 60} min`;
+  return `${seconds}s`;
+}
 
 // Rename a group or change its photo (admins only).
 router.patch('/:id', (req, res) => {

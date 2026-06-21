@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS chats (
   name        TEXT,                  -- group name (null for direct)
   avatar_url  TEXT,
   created_by  TEXT,
+  disappearing_timer INTEGER NOT NULL DEFAULT 0,  -- seconds; 0 = off
   created_at  INTEGER NOT NULL
 );
 
@@ -61,6 +62,7 @@ CREATE TABLE IF NOT EXISTS messages (
   reply_to    TEXT,
   encrypted   INTEGER NOT NULL DEFAULT 0,  -- 1 = body holds an E2EE ciphertext envelope
   forwarded   INTEGER NOT NULL DEFAULT 0,
+  expires_at  INTEGER,                      -- disappearing messages: delete after this time
   created_at  INTEGER NOT NULL,
   edited_at   INTEGER,
   deleted     INTEGER NOT NULL DEFAULT 0,
@@ -100,5 +102,7 @@ ensureColumn('messages', 'forwarded', 'forwarded INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chat_members', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chat_members', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chat_members', 'muted_until', 'muted_until INTEGER NOT NULL DEFAULT 0');
+ensureColumn('chats', 'disappearing_timer', 'disappearing_timer INTEGER NOT NULL DEFAULT 0');
+ensureColumn('messages', 'expires_at', 'expires_at INTEGER');
 
 module.exports = db;

@@ -2,6 +2,7 @@
 
 const { Server } = require('socket.io');
 const db = require('./db');
+const config = require('./config');
 const { verifyToken, id, now, publicUser } = require('./util');
 const {
   isMember, getMemberIds, serializeMessage, getChatSummary,
@@ -60,6 +61,30 @@ function setup(httpServer) {
     }
   }
 
+  // Periodically delete expired (disappearing) messages and notify members.
+  function sweepExpired() {
+    const expired = db
+      .prepare('SELECT id, chat_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?')
+      .all(now());
+    if (!expired.length) return;
+    const chatsTouched = new Set();
+    const del = db.prepare('DELETE FROM messages WHERE id = ?');
+    for (const row of expired) {
+      del.run(row.id);
+      for (const memberId of getMemberIds(row.chat_id)) {
+        io.to(`user:${memberId}`).emit('message:expired', { messageId: row.id, chatId: row.chat_id });
+      }
+      chatsTouched.add(row.chat_id);
+    }
+    for (const chatId of chatsTouched) {
+      for (const memberId of getMemberIds(chatId)) {
+        io.to(`user:${memberId}`).emit('chat:update', getChatSummary(chatId, memberId));
+      }
+    }
+  }
+  const sweepTimer = setInterval(sweepExpired, config.sweepMs);
+  if (sweepTimer.unref) sweepTimer.unref();
+
   io.on('connection', (socket) => {
     const userId = socket.userId;
     const wasOffline = !isOnline(userId);
@@ -99,9 +124,13 @@ function setup(httpServer) {
         const ts = now();
         // Encrypted bodies are opaque ciphertext — keep them verbatim (no trim).
         const storedBody = encrypted ? body : (body ? body.trim() : null);
+        // Disappearing messages: stamp an expiry if the chat has a timer set.
+        const chatRow = db.prepare('SELECT disappearing_timer FROM chats WHERE id = ?').get(chatId);
+        const timer = chatRow ? chatRow.disappearing_timer : 0;
+        const expiresAt = timer > 0 ? ts + timer * 1000 : null;
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -114,6 +143,7 @@ function setup(httpServer) {
           replyTo || null,
           encrypted ? 1 : 0,
           forwarded ? 1 : 0,
+          expiresAt,
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));

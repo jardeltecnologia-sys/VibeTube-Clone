@@ -57,6 +57,7 @@ export const api = {
   muteChat: (id, until) => request('POST', `/chats/${id}/mute`, { until }),
   searchMessages: (q, chatId) =>
     request('GET', `/search/messages?q=${encodeURIComponent(q)}${chatId ? `&chatId=${chatId}` : ''}`),
+  setDisappearing: (id, seconds) => request('POST', `/chats/${id}/disappearing`, { seconds }),
 
   async upload(file) {
     const fd = new FormData();
