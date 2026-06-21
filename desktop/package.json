@@ -1,0 +1,32 @@
+{
+  "name": "speedvox-desktop",
+  "version": "0.1.0",
+  "description": "SpeedVox como aplicativo de desktop (Electron) — empacota o servidor e o frontend.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3 --module-dir ..",
+    "dist": "npm run rebuild && electron-builder",
+    "dist:dir": "npm run rebuild && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^30.0.0",
+    "electron-builder": "^24.13.3",
+    "@electron/rebuild": "^3.6.0"
+  },
+  "build": {
+    "appId": "app.speedvox.desktop",
+    "productName": "SpeedVox",
+    "directories": { "output": "release" },
+    "files": ["main.js"],
+    "extraResources": [
+      { "from": "../server", "to": "app/server" },
+      { "from": "../public", "to": "app/public" },
+      { "from": "../node_modules", "to": "app/node_modules" },
+      { "from": "../package.json", "to": "app/package.json" }
+    ],
+    "linux": { "target": ["AppImage"], "category": "Network" },
+    "win": { "target": ["nsis"] },
+    "mac": { "target": ["dmg"], "category": "public.app-category.social-networking" }
+  }
+}

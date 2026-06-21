@@ -40,8 +40,8 @@ const config = {
     redirectUri: `${PUBLIC_URL}/api/auth/google/callback`,
     enabled: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
   },
-  dataDir: path.join(__dirname, '..', 'data'),
-  uploadDir: path.join(__dirname, '..', 'uploads'),
+  dataDir: process.env.SPEEDVOX_DATA_DIR || path.join(__dirname, '..', 'data'),
+  uploadDir: process.env.SPEEDVOX_UPLOAD_DIR || path.join(__dirname, '..', 'uploads'),
   // How often to sweep expired (disappearing) messages.
   sweepMs: parseInt(process.env.SWEEP_MS || '15000', 10),
   // Web Push (VAPID). If unset, a key pair is generated and persisted on boot.

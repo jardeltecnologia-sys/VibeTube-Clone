@@ -79,6 +79,13 @@ Acesse **http://localhost:3000**. Crie uma conta com e-mail e comece a conversar
 Para testar conversas reais, abra uma segunda aba/navegador anônimo e cadastre
 outro usuário.
 
+### Instalar como aplicativo
+
+- **PWA**: abra o site e use "Instalar app" / "Adicionar à tela inicial".
+- **Desktop (Electron)** e **Android (Capacitor/APK)**: veja **[BUILD.md](BUILD.md)**
+  (a pasta `desktop/` empacota servidor + frontend num executável; a pasta
+  `mobile/` gera um APK que carrega o seu servidor hospedado).
+
 ### Variáveis de ambiente (`.env`)
 
 | Variável | Descrição |
