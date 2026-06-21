@@ -28,6 +28,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/chats', require('./routes/chats'));
 app.use('/api/search', require('./routes/search'));
+app.use('/api/push', require('./routes/push'));
 app.use('/api/upload', require('./routes/upload'));
 
 app.get('/api/health', (req, res) => {

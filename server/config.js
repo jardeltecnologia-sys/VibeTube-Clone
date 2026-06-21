@@ -44,6 +44,10 @@ const config = {
   uploadDir: path.join(__dirname, '..', 'uploads'),
   // How often to sweep expired (disappearing) messages.
   sweepMs: parseInt(process.env.SWEEP_MS || '15000', 10),
+  // Web Push (VAPID). If unset, a key pair is generated and persisted on boot.
+  vapidPublic: process.env.VAPID_PUBLIC_KEY || '',
+  vapidPrivate: process.env.VAPID_PRIVATE_KEY || '',
+  vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@speedvox.app',
 };
 
 module.exports = config;

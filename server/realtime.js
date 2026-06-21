@@ -7,6 +7,18 @@ const { verifyToken, id, now, publicUser } = require('./util');
 const {
   isMember, getMemberIds, serializeMessage, getChatSummary, iBlocked, isBlockedEither,
 } = require('./chat-service');
+const push = require('./push');
+
+// Privacy-aware push preview: never reveals content of encrypted messages.
+function pushPreview(message) {
+  if (message.encrypted) return 'Nova mensagem';
+  switch (message.type) {
+    case 'image': return '📷 Foto';
+    case 'audio': return '🎤 Mensagem de voz';
+    case 'file': return `📎 ${message.mediaName || 'Arquivo'}`;
+    default: return message.body || 'Nova mensagem';
+  }
+}
 
 // userId -> Set of socket ids
 const online = new Map();
@@ -60,6 +72,20 @@ function setup(httpServer) {
       if (memberId === exceptUserId) continue;
       io.to(`user:${memberId}`).emit(event, payload);
     }
+  }
+
+  // Fire-and-forget Web Push for a new message.
+  function notifyPush(chatId, sender, message) {
+    if (!push.isEnabled()) return;
+    const targets = push.recipientsFor(chatId, sender.id, isOnline);
+    if (!targets.length) return;
+    const chat = db.prepare('SELECT type, name FROM chats WHERE id = ?').get(chatId);
+    const isGroup = chat && chat.type === 'group';
+    const title = isGroup ? (chat.name || 'Grupo') : sender.display_name;
+    let body = pushPreview(message);
+    if (isGroup) body = `${sender.display_name}: ${body}`;
+    const payload = { title, body, chatId, tag: chatId };
+    for (const uid of targets) push.sendToUser(uid, payload).catch(() => {});
   }
 
   // Periodically delete expired (disappearing) messages and notify members.
@@ -174,6 +200,10 @@ function setup(httpServer) {
         for (const memberId of getMemberIds(chatId)) {
           io.to(`user:${memberId}`).emit('chat:update', getChatSummary(chatId, memberId));
         }
+
+        // Web Push to recipients who are offline (and haven't muted the chat).
+        notifyPush(chatId, socket.user, message);
+
         if (typeof cb === 'function') cb({ ok: true, message });
       } catch (err) {
         console.error('message:send', err);

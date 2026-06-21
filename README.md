@@ -44,6 +44,8 @@ de apagão ou queda do servidor central.
   remove as mensagens vencidas e avisa os participantes em tempo real.
 - **Bloquear contatos**: o bloqueado não chega até você (mensagens ocultas e
   presença escondida), e ele vê a mensagem como "enviada" sem saber do bloqueio.
+- **Notificações push (Web Push)**: receba mensagens com o app fechado. Respeita
+  silenciar/bloquear e não revela o conteúdo de mensagens cifradas na notificação.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
 - **Modo mesh** (experimental) — canais WebRTC peer-to-peer entre usuários.
 
@@ -71,6 +73,7 @@ outro usuário.
 | `PUBLIC_URL` | URL pública do servidor (usada no OAuth e em links de mídia). |
 | `JWT_SECRET` | Segredo para assinar os tokens de sessão. **Troque em produção.** |
 | `SWEEP_MS` | Intervalo (ms) da varredura de mensagens temporárias vencidas (padrão `15000`). |
+| `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Chaves Web Push. Se vazias, são geradas e persistidas em `data/vapid.json` no primeiro boot. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Credenciais do Google Sign-In (opcional). |
 
 ### Ativando o login com Google
@@ -176,4 +179,4 @@ servidor quando a conectividade voltasse.
 ## 🧪 Stack
 
 Node.js · Express · Socket.IO · better-sqlite3 · bcryptjs · jsonwebtoken · multer ·
-WebRTC · Web Crypto (ECDH/AES-GCM) · PWA (Service Worker + Web App Manifest).
+web-push · WebRTC · Web Crypto (ECDH/AES-GCM) · PWA (Service Worker + Web App Manifest).

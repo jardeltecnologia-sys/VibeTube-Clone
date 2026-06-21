@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v9';
+const CACHE = 'speedvox-shell-v10';
 const SHELL = [
   '/',
   '/index.html',
@@ -26,6 +26,40 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) =>
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
+  );
+});
+
+// --- Web Push: show a notification for an incoming message ---
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  const title = data.title || 'SpeedVox';
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || 'Nova mensagem',
+      tag: data.tag || undefined,
+      data: { chatId: data.chatId || null },
+      icon: '/icons/icon.svg',
+      badge: '/icons/icon.svg',
+      renotify: Boolean(data.tag),
+    })
+  );
+});
+
+// Focus (or open) the app and jump to the relevant chat when tapped.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const chatId = event.notification.data && event.notification.data.chatId;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ('focus' in client) {
+          if (chatId) client.postMessage({ type: 'open-chat', chatId });
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow(`/${chatId ? `?chat=${chatId}` : ''}`);
+    })
   );
 });
 

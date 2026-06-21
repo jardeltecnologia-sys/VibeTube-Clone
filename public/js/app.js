@@ -1387,6 +1387,39 @@ function logout() {
 }
 
 // ------------------------------------------------------------------ boot
+// ------------------------------------------------------------------ push
+function urlBase64ToUint8Array(base64) {
+  const padding = '='.repeat((4 - (base64.length % 4)) % 4);
+  const b64 = (base64 + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(b64);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+// Subscribe this device to Web Push so messages arrive when the app is closed.
+async function setupPush() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+  try {
+    const { publicKey, enabled } = await api.pushVapid();
+    if (!enabled || !publicKey) return;
+    if (Notification.permission === 'denied') return;
+    if (Notification.permission === 'default') {
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') return;
+    }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(publicKey),
+      });
+    }
+    await api.pushSubscribe(sub);
+  } catch { /* notifications are best-effort */ }
+}
+
 async function startApp(user) {
   state.me = user;
   $('#auth-screen').classList.add('hidden');
@@ -1417,6 +1450,8 @@ async function startApp(user) {
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;
+
+  setupPush();
 }
 
 async function boot() {
@@ -1448,6 +1483,23 @@ async function boot() {
     } catch {
       setToken(null);
     }
+  }
+
+  // Open the right chat when a notification is tapped.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.addEventListener('message', (e) => {
+      if (e.data && e.data.type === 'open-chat' && e.data.chatId && state.chats.has(e.data.chatId)) {
+        openChat(e.data.chatId);
+      }
+    });
+  }
+  const chatParam = new URLSearchParams(location.search).get('chat');
+  if (chatParam) {
+    history.replaceState(null, '', location.pathname);
+    const tryOpen = setInterval(() => {
+      if (state.chats.has(chatParam)) { clearInterval(tryOpen); openChat(chatParam); }
+    }, 300);
+    setTimeout(() => clearInterval(tryOpen), 6000);
   }
 
   if ('serviceWorker' in navigator) {
