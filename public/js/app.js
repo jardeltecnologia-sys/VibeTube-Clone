@@ -137,6 +137,8 @@ function setupAuthScreen() {
     } catch (err) { $('#auth-error').textContent = err.message; }
   };
 
+  $('#link-device-btn').onclick = linkNewDeviceFlow;
+
   $('#register-form').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);
@@ -151,6 +153,36 @@ function setupAuthScreen() {
       await startApp(user);
     } catch (err) { $('#auth-error').textContent = err.message; }
   };
+}
+
+// New device: request a code, show it, and poll until an existing device approves.
+async function linkNewDeviceFlow() {
+  let code;
+  try { ({ code } = await api.linkNew()); } catch { return toast('Falha ao iniciar vinculação'); }
+  const codeEl = el('div', { class: 'link-code' }, code);
+  const status = el('p', { class: 'auth-hint' }, 'Aguardando aprovação no outro aparelho…');
+  const body = el('div', { class: 'modal-body', style: 'text-align:center' },
+    el('p', { class: 'auth-hint', style: 'margin-bottom:12px' }, 'Em um aparelho já conectado, abra Perfil → "Vincular um dispositivo" e digite este código:'),
+    codeEl, status);
+  const backdrop = modalShell('Vincular dispositivo', body);
+
+  let active = true;
+  backdrop.addEventListener('click', (e) => { if (e.target === backdrop) active = false; });
+  const poll = setInterval(async () => {
+    if (!active) { clearInterval(poll); return; }
+    let res;
+    try { res = await api.linkStatus(code); } catch { return; }
+    if (res.status === 'approved' && res.token) {
+      clearInterval(poll); active = false;
+      setToken(res.token);
+      try { const { user } = await api.me(); backdrop.remove(); await startApp(user); }
+      catch { toast('Falha ao entrar'); }
+    } else if (res.status === 'expired' || res.status === 'invalid') {
+      clearInterval(poll);
+      status.textContent = 'Código expirado. Feche e tente novamente.';
+      status.style.color = 'var(--danger)';
+    }
+  }, 2000);
 }
 
 // ------------------------------------------------------------------ socket
@@ -1413,10 +1445,65 @@ function profileModal() {
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); showStarredMessages(); } }, '★ Mensagens favoritas')),
     el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); privacyModal(); } }, '🔒 Privacidade')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); linkDeviceModal(); } }, '📱 Vincular um dispositivo')),
+    el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
       meshToggleRow()));
   const footer = el('div', { class: 'modal-footer' }, save);
   const backdrop = modalShell('Perfil', body, footer);
+}
+
+async function privacyModal() {
+  let p;
+  try { p = (await api.getPrivacy()).privacy; } catch { return toast('Falha ao carregar privacidade'); }
+  const select = (value, options) => {
+    const s = el('select', { class: 'select-input' });
+    for (const [v, label] of options) {
+      const o = el('option', { value: v }, label);
+      if (v === value) o.setAttribute('selected', '');
+      s.append(o);
+    }
+    return s;
+  };
+  const choices = [['everyone', 'Todos'], ['contacts', 'Meus contatos'], ['nobody', 'Ninguém']];
+  const lastSeen = select(p.lastSeen, choices);
+  const groups = select(p.groups, choices);
+  const rr = el('input', { type: 'checkbox' });
+  if (p.readReceipts) rr.setAttribute('checked', '');
+
+  const save = el('button', { class: 'btn-primary', onclick: async () => {
+    await api.setPrivacy({ lastSeen: lastSeen.value, groups: groups.value, readReceipts: rr.checked });
+    backdrop.remove();
+    toast('Privacidade atualizada');
+  } }, 'Salvar');
+
+  const body = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Visto por último e online'), lastSeen),
+    el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Quem pode me adicionar a grupos'), groups),
+    el('label', { class: 'field-row', style: 'display:flex;align-items:center;gap:10px;cursor:pointer' },
+      rr, el('span', {}, 'Confirmações de leitura (recíproco)')),
+    el('p', { class: 'auth-hint' }, 'Se você desativar as confirmações de leitura, também não verá as dos outros.'));
+  const footer = el('div', { class: 'modal-footer' }, save);
+  const backdrop = modalShell('Privacidade', body, footer);
+}
+
+// Logged-in device approving a code shown on a new device.
+function linkDeviceModal() {
+  const input = el('input', { type: 'text', placeholder: 'Código exibido no outro aparelho', style: 'text-transform:uppercase;letter-spacing:3px;text-align:center;font-size:20px' });
+  const approve = el('button', { class: 'btn-primary', onclick: async () => {
+    const code = input.value.trim().toUpperCase();
+    if (code.length < 6) return toast('Informe o código');
+    try { await api.linkApprove(code); backdrop.remove(); toast('Dispositivo vinculado'); }
+    catch (e) { toast(e.message || 'Código inválido'); }
+  } }, 'Vincular');
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint', style: 'margin-bottom:14px' }, 'No novo aparelho, abra o SpeedVox e toque em "Vincular dispositivo". Digite aqui o código mostrado.'),
+    input);
+  const footer = el('div', { class: 'modal-footer' }, approve);
+  const backdrop = modalShell('Vincular um dispositivo', body, footer);
+  setTimeout(() => input.focus(), 50);
 }
 
 async function showStarredMessages() {

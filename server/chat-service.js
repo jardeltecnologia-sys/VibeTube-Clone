@@ -30,6 +30,15 @@ function contactsOf(userId) {
   return rows.map((r) => r.uid).filter((uid) => !isBlockedEither(userId, uid));
 }
 
+// Whether `adderId` is allowed to add `targetId` to a group, per target's privacy.
+function canAddToGroup(targetId, adderId) {
+  const t = db.prepare('SELECT privacy_groups FROM users WHERE id = ?').get(targetId);
+  const setting = (t && t.privacy_groups) || 'everyone';
+  if (setting === 'everyone') return true;
+  if (setting === 'nobody') return false;
+  return contactsOf(targetId).includes(adderId); // 'contacts'
+}
+
 function isMember(chatId, userId) {
   return Boolean(
     db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId)
@@ -215,4 +224,5 @@ module.exports = {
   blockRow,
   isBlockedEither,
   contactsOf,
+  canAddToGroup,
 };

@@ -6,6 +6,7 @@ const { requireAuth } = require('../auth-middleware');
 const { id, now } = require('../util');
 const {
   isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, serializeMessage, getMemberIds,
+  canAddToGroup,
 } = require('../chat-service');
 const bus = require('../bus');
 
@@ -60,7 +61,8 @@ router.post('/group', (req, res) => {
       'INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
     );
     for (const m of members) {
-      if (m !== req.user.id && db.prepare('SELECT 1 FROM users WHERE id = ?').get(m)) {
+      if (m !== req.user.id && db.prepare('SELECT 1 FROM users WHERE id = ?').get(m)
+          && canAddToGroup(m, req.user.id)) {
         ins.run(chatId, m, 'member', ts);
       }
     }
@@ -152,14 +154,18 @@ router.post('/:id/members', (req, res) => {
     'INSERT OR IGNORE INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)'
   );
   const added = [];
+  const blockedByPrivacy = [];
   for (const m of memberIds || []) {
     const u = db.prepare('SELECT display_name FROM users WHERE id = ?').get(m);
-    if (u && !isMember(req.params.id, m)) { ins.run(req.params.id, m, 'member', now()); added.push(u.display_name); }
+    if (!u || isMember(req.params.id, m)) continue;
+    if (!canAddToGroup(m, req.user.id)) { blockedByPrivacy.push(u.display_name); continue; }
+    ins.run(req.params.id, m, 'member', now());
+    added.push(u.display_name);
   }
   if (added.length) {
     bus.systemMessage(req.params.id, `${req.user.display_name} adicionou ${added.join(', ')}`, req.user.id);
   }
-  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+  res.json({ chat: getChatSummary(req.params.id, req.user.id), blockedByPrivacy });
 });
 
 // Remove a member from a group (admins only).

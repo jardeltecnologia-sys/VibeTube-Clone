@@ -70,6 +70,40 @@ router.get('/search', (req, res) => {
   res.json({ users: rows.map(publicUser) });
 });
 
+// Privacy settings (read).
+router.get('/me/privacy', (req, res) => {
+  res.json({
+    privacy: {
+      lastSeen: req.user.privacy_last_seen || 'everyone',
+      readReceipts: req.user.read_receipts !== 0,
+      groups: req.user.privacy_groups || 'everyone',
+    },
+  });
+});
+
+// Privacy settings (update).
+router.patch('/me/privacy', (req, res) => {
+  const { lastSeen, readReceipts, groups } = req.body || {};
+  const valid = ['everyone', 'contacts', 'nobody'];
+  if (typeof lastSeen === 'string' && valid.includes(lastSeen)) {
+    db.prepare('UPDATE users SET privacy_last_seen = ? WHERE id = ?').run(lastSeen, req.user.id);
+  }
+  if (typeof readReceipts === 'boolean') {
+    db.prepare('UPDATE users SET read_receipts = ? WHERE id = ?').run(readReceipts ? 1 : 0, req.user.id);
+  }
+  if (typeof groups === 'string' && valid.includes(groups)) {
+    db.prepare('UPDATE users SET privacy_groups = ? WHERE id = ?').run(groups, req.user.id);
+  }
+  const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
+  res.json({
+    privacy: {
+      lastSeen: u.privacy_last_seen,
+      readReceipts: u.read_receipts !== 0,
+      groups: u.privacy_groups,
+    },
+  });
+});
+
 // Get a single user's public profile.
 router.get('/:id', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);

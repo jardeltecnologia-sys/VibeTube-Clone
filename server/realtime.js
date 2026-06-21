@@ -49,6 +49,9 @@ function setup(httpServer) {
 
   // Notify a user's chat partners that their presence changed.
   function broadcastPresence(userId, status) {
+    // Respect the "last seen / online" privacy setting.
+    const pref = db.prepare('SELECT privacy_last_seen FROM users WHERE id = ?').get(userId);
+    if (pref && pref.privacy_last_seen === 'nobody') return;
     const chatIds = db
       .prepare('SELECT chat_id FROM chat_members WHERE user_id = ?')
       .all(userId)
@@ -152,8 +155,9 @@ function setup(httpServer) {
 
   // Periodically delete expired (disappearing) messages and notify members.
   function sweepExpired() {
-    // Expired statuses (24h stories) are just removed; no notification needed.
+    // Expired statuses (24h stories) and stale device-link codes are removed.
     db.prepare('DELETE FROM statuses WHERE expires_at <= ?').run(now());
+    db.prepare('DELETE FROM link_requests WHERE expires_at <= ?').run(now());
     const expired = db
       .prepare('SELECT id, chat_id FROM messages WHERE expires_at IS NOT NULL AND expires_at <= ?')
       .all(now());
@@ -299,6 +303,14 @@ function setup(httpServer) {
         chatId,
         userId
       );
+      // Always refresh my own unread count.
+      io.to(`user:${userId}`).emit('chat:update', getChatSummary(chatId, userId));
+
+      // Read receipts are reciprocal: if I disabled them, I neither send nor
+      // (below) receive blue ticks.
+      const myRR = db.prepare('SELECT read_receipts FROM users WHERE id = ?').get(userId).read_receipts;
+      if (!myRR) return;
+
       const unread = db
         .prepare(
           `SELECT id FROM messages WHERE chat_id = ? AND sender_id != ?
@@ -310,8 +322,11 @@ function setup(httpServer) {
          ON CONFLICT(message_id, user_id) DO UPDATE SET status='read', at=excluded.at`
       );
       for (const m of unread) stmt.run(m.id, userId, ts);
-      emitToChat(chatId, 'receipt', { chatId, userId, status: 'read', at: ts });
-      io.to(`user:${userId}`).emit('chat:update', getChatSummary(chatId, userId));
+      // Emit my read receipt only to members who also keep read receipts on.
+      for (const memberId of getMemberIds(chatId)) {
+        const rr = db.prepare('SELECT read_receipts FROM users WHERE id = ?').get(memberId).read_receipts;
+        if (rr) io.to(`user:${memberId}`).emit('receipt', { chatId, userId, status: 'read', at: ts });
+      }
     });
 
     // --- Delivered receipt for a single message ---

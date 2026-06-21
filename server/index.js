@@ -31,6 +31,7 @@ app.use('/api/messages', require('./routes/messages'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/status', require('./routes/status'));
 app.use('/api/push', require('./routes/push'));
+app.use('/api/link', require('./routes/link'));
 app.use('/api/upload', require('./routes/upload'));
 
 app.get('/api/health', (req, res) => {

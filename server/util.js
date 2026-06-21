@@ -31,7 +31,8 @@ function publicUser(u) {
     avatarUrl: u.avatar_url || null,
     about: u.about || '',
     publicKey: u.public_key || null,
-    lastSeen: u.last_seen || null,
+    // Honor the "last seen" privacy setting globally.
+    lastSeen: u.privacy_last_seen === 'nobody' ? null : (u.last_seen || null),
   };
 }
 

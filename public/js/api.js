@@ -43,6 +43,11 @@ export const api = {
   blockUser: (id) => request('POST', `/users/${id}/block`),
   unblockUser: (id) => request('POST', `/users/${id}/unblock`),
   getBlocks: () => request('GET', '/users/me/blocks'),
+  getPrivacy: () => request('GET', '/users/me/privacy'),
+  setPrivacy: (d) => request('PATCH', '/users/me/privacy', d),
+  linkNew: () => request('POST', '/link/new'),
+  linkStatus: (code) => request('GET', `/link/status?code=${encodeURIComponent(code)}`),
+  linkApprove: (code) => request('POST', '/link/approve', { code }),
 
   listChats: () => request('GET', '/chats'),
   openDirect: (userId) => request('POST', '/chats/direct', { userId }),

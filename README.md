@@ -52,6 +52,10 @@ de apagão ou queda do servidor central.
 - **Status / Stories**: posts de texto ou imagem que somem em 24h, visíveis aos
   seus contatos (quem compartilha conversa), com visualizador em tela cheia e
   lista de quem viu.
+- **Configurações de privacidade**: visto por último/online, confirmações de
+  leitura (recíprocas) e quem pode te adicionar a grupos.
+- **Multidispositivo**: vincule outro aparelho por código (um dispositivo já
+  conectado aprova; o novo recebe a sessão).
 - **Notificações push (Web Push)**: receba mensagens com o app fechado. Respeita
   silenciar/bloquear e não revela o conteúdo de mensagens cifradas na notificação.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
