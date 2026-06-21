@@ -1,0 +1,32 @@
+SpeedVox — como rodar
+=====================
+
+Pré-requisito: Node.js 20 ou superior (https://nodejs.org).
+
+1) Abra um terminal nesta pasta.
+
+2) Instale as dependências:
+       npm install
+
+3) (Opcional) Configure variáveis:
+       cp .env.example .env      (no Windows: copy .env.example .env)
+   Ajuste JWT_SECRET e, se quiser, login com Google / TURN / Web Push.
+   Sem isso o app funciona com e-mail/senha normalmente.
+
+4) Inicie o servidor:
+       npm start
+
+5) Abra no navegador:
+       http://localhost:3000
+
+   Crie uma conta com e-mail e comece a conversar.
+   Para testar uma conversa real, abra uma segunda aba anônima e cadastre
+   outro usuário.
+
+Observações
+-----------
+- Criptografia ponta-a-ponta e instalação como PWA exigem um contexto seguro
+  (HTTPS) em produção; em localhost já funcionam.
+- node_modules/, data/ e uploads/ NÃO vêm no pacote — são recriados
+  automaticamente (npm install + primeiro uso).
+- Detalhes completos de funcionalidades e configuração estão no README.md.
