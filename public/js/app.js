@@ -3,6 +3,7 @@ import { MeshManager } from './mesh.js';
 import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
+import { qrSVG } from './qrcode.js';
 
 // ------------------------------------------------------------------ state
 const state = {
@@ -159,11 +160,13 @@ function setupAuthScreen() {
 async function linkNewDeviceFlow() {
   let code;
   try { ({ code } = await api.linkNew()); } catch { return toast('Falha ao iniciar vinculação'); }
+  const qrWrap = el('div', { class: 'link-qr' });
+  try { qrWrap.innerHTML = qrSVG(code, { size: 200, margin: 4 }); } catch { /* fall back to code only */ }
   const codeEl = el('div', { class: 'link-code' }, code);
   const status = el('p', { class: 'auth-hint' }, 'Aguardando aprovação no outro aparelho…');
   const body = el('div', { class: 'modal-body', style: 'text-align:center' },
-    el('p', { class: 'auth-hint', style: 'margin-bottom:12px' }, 'Em um aparelho já conectado, abra Perfil → "Vincular um dispositivo" e digite este código:'),
-    codeEl, status);
+    el('p', { class: 'auth-hint', style: 'margin-bottom:12px' }, 'Em um aparelho já conectado, abra Perfil → "Vincular um dispositivo" e escaneie o QR ou digite o código:'),
+    qrWrap, codeEl, status);
   const backdrop = modalShell('Vincular dispositivo', body);
 
   let active = true;

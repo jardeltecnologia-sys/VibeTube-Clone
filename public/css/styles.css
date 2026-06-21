@@ -99,6 +99,8 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .btn-link-device { width: 100%; margin-top: 12px; background: transparent; color: var(--text-dim);
   border: 1px solid var(--divider); border-radius: 10px; padding: 11px; font-size: 14px; }
 .btn-link-device:hover { color: var(--text); border-color: var(--accent); }
+.link-qr { width: 200px; margin: 0 auto 14px; background: #fff; padding: 10px; border-radius: 12px; }
+.link-qr svg { display: block; width: 100%; height: auto; }
 .link-code { font-size: 34px; font-weight: 700; letter-spacing: 8px; color: var(--accent);
   background: var(--panel-2); border-radius: 12px; padding: 18px; margin: 8px 0 14px; font-family: monospace; }
 .auth-error { color: var(--danger); font-size: 13px; text-align: center; min-height: 18px; margin-top: 10px; }
