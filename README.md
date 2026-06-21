@@ -37,6 +37,9 @@ de apagão ou queda do servidor central.
 - **Contadores de não lidas** e ordenação por atividade.
 - **Organização de conversas**: fixar (no topo), arquivar e silenciar — estado
   individual por usuário.
+- **Busca de mensagens**: o servidor busca no texto claro (grupos e mensagens
+  não cifradas); o cliente complementa buscando localmente nas mensagens E2EE já
+  decifradas — o ciphertext nunca é exposto na busca.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
 - **Modo mesh** (experimental) — canais WebRTC peer-to-peer entre usuários.
 

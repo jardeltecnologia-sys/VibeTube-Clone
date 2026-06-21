@@ -440,6 +440,56 @@ function applyChatPatch({ chat }) {
   if (chat) { state.chats.set(chat.id, chat); renderChatList(); }
 }
 
+// Search messages: server covers plaintext; the client covers E2EE messages it
+// has already decrypted locally. Results are appended below the chat list.
+async function performMessageSearch(q) {
+  const query = (q || '').toLowerCase();
+  if (query.length < 2) return; // chat-title filtering already handled by renderChatList
+
+  let serverResults = [];
+  try { serverResults = (await api.searchMessages(q)).results; } catch { /* offline: local only */ }
+  // Drop results for a stale query (user kept typing).
+  if ($('#chat-search').value.trim().toLowerCase() !== query) return;
+
+  // Local matches over decrypted encrypted messages (server can't read those).
+  const localResults = [];
+  for (const list of state.messages.values()) {
+    for (const m of list) {
+      if (m.encrypted && !m.deleted && m._plain && m._plain.toLowerCase().includes(query)) {
+        localResults.push({ messageId: m.id, chatId: m.chatId, senderId: m.senderId,
+          type: m.type, body: m._plain, createdAt: m.createdAt });
+      }
+    }
+  }
+
+  const seen = new Set();
+  const merged = [...serverResults, ...localResults]
+    .filter((r) => state.chats.has(r.chatId) && !seen.has(r.messageId) && seen.add(r.messageId))
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .slice(0, 30);
+
+  const listEl = $('#chat-list');
+  if (!merged.length) {
+    listEl.append(el('li', { class: 'archived-toggle' }, `Nenhuma mensagem encontrada para "${q}"`));
+    return;
+  }
+  listEl.append(el('li', { class: 'search-section-head' }, `Mensagens (${merged.length})`));
+  for (const r of merged) {
+    const chat = state.chats.get(r.chatId);
+    const avatar = el('span', { class: 'avatar' });
+    avatarBg(avatar, chat.avatarUrl, chat.title);
+    const snippet = r.type === 'text' ? (r.body || '') : `📎 ${r.mediaName || r.type}`;
+    listEl.append(el('li', { class: 'chat-item', onclick: () => { $('#chat-search').value = ''; renderChatList(); openChat(r.chatId); } },
+      avatar,
+      el('div', { class: 'chat-item-body' },
+        el('div', { class: 'chat-item-row' },
+          el('span', { class: 'chat-item-name' }, chat.title),
+          el('span', { class: 'chat-item-time' }, fmtTime(r.createdAt))),
+        el('div', { class: 'chat-item-preview' },
+          el('span', { class: 'chat-item-last' }, snippet)))));
+  }
+}
+
 // ------------------------------------------------------------------ render: header
 function presenceText(chat) {
   if (chat.type === 'group') {
@@ -876,7 +926,12 @@ function setupComposer() {
     $('#empty-state').classList.remove('hidden');
     renderChatList();
   };
-  $('#chat-search').addEventListener('input', renderChatList);
+  let searchTimer;
+  $('#chat-search').addEventListener('input', () => {
+    renderChatList();
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => performMessageSearch($('#chat-search').value.trim()), 220);
+  });
   $('#chat-header-info').onclick = showChatInfo;
   $('#call-audio-btn').onclick = () => startCall('audio');
   $('#call-video-btn').onclick = () => startCall('video');

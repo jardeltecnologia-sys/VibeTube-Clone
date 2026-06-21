@@ -55,6 +55,8 @@ export const api = {
   pinChat: (id, pinned) => request('POST', `/chats/${id}/pin`, { pinned }),
   archiveChat: (id, archived) => request('POST', `/chats/${id}/archive`, { archived }),
   muteChat: (id, until) => request('POST', `/chats/${id}/mute`, { until }),
+  searchMessages: (q, chatId) =>
+    request('GET', `/search/messages?q=${encodeURIComponent(q)}${chatId ? `&chatId=${chatId}` : ''}`),
 
   async upload(file) {
     const fd = new FormData();
