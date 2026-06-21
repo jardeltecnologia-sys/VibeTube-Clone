@@ -4,7 +4,7 @@ const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../auth-middleware');
 const { id, now, publicUser } = require('../util');
-const { contactsOf, iBlocked, isBlockedEither } = require('../chat-service');
+const { contactsOf, isBlockedEither, publicUserFor } = require('../chat-service');
 const bus = require('../bus');
 
 const DAY = 24 * 60 * 60 * 1000;
@@ -56,7 +56,7 @@ router.get('/', (req, res) => {
   for (const contactId of contactsOf(req.user.id)) {
     const rows = activeStatuses(contactId);
     if (!rows.length) continue;
-    const user = publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(contactId));
+    const user = publicUserFor(db.prepare('SELECT * FROM users WHERE id = ?').get(contactId), req.user.id);
     const statuses = rows.map((s) => ({
       ...serializeStatus(s),
       viewed: Boolean(
@@ -100,7 +100,7 @@ router.get('/:id/viewers', (req, res) => {
        WHERE v.status_id = ? ORDER BY v.viewed_at DESC`
     )
     .all(req.params.id);
-  res.json({ viewers: rows.map((u) => ({ ...publicUser(u), viewedAt: u.viewed_at })) });
+  res.json({ viewers: rows.map((u) => ({ ...publicUserFor(u, req.user.id), viewedAt: u.viewed_at })) });
 });
 
 // Delete my status.

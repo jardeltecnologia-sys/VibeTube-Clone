@@ -1470,17 +1470,21 @@ async function privacyModal() {
   const choices = [['everyone', 'Todos'], ['contacts', 'Meus contatos'], ['nobody', 'Ninguém']];
   const lastSeen = select(p.lastSeen, choices);
   const groups = select(p.groups, choices);
+  const photo = select(p.photo, choices);
+  const about = select(p.about, choices);
   const rr = el('input', { type: 'checkbox' });
   if (p.readReceipts) rr.setAttribute('checked', '');
 
   const save = el('button', { class: 'btn-primary', onclick: async () => {
-    await api.setPrivacy({ lastSeen: lastSeen.value, groups: groups.value, readReceipts: rr.checked });
+    await api.setPrivacy({ lastSeen: lastSeen.value, groups: groups.value, photo: photo.value, about: about.value, readReceipts: rr.checked });
     backdrop.remove();
     toast('Privacidade atualizada');
   } }, 'Salvar');
 
   const body = el('div', { class: 'modal-body' },
     el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Visto por último e online'), lastSeen),
+    el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Foto do perfil'), photo),
+    el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Recado'), about),
     el('div', { class: 'field-row' }, el('div', { class: 'field-label' }, 'Quem pode me adicionar a grupos'), groups),
     el('label', { class: 'field-row', style: 'display:flex;align-items:center;gap:10px;cursor:pointer' },
       rr, el('span', {}, 'Confirmações de leitura (recíproco)')),

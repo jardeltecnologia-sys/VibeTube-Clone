@@ -39,6 +39,36 @@ function canAddToGroup(targetId, adderId) {
   return contactsOf(targetId).includes(adderId); // 'contacts'
 }
 
+// Do two users share at least one chat?
+function sharesChat(a, b) {
+  return Boolean(
+    db.prepare(
+      `SELECT 1 FROM chat_members m1 JOIN chat_members m2 ON m1.chat_id = m2.chat_id
+       WHERE m1.user_id = ? AND m2.user_id = ? LIMIT 1`
+    ).get(a, b)
+  );
+}
+
+// Viewer-aware public projection: applies photo/about/last-seen privacy.
+function publicUserFor(u, viewerId) {
+  const base = publicUser(u);
+  if (!u || !viewerId || viewerId === u.id) return base;
+  let contactKnown = null;
+  const isContact = () => {
+    if (contactKnown === null) contactKnown = sharesChat(viewerId, u.id) && !isBlockedEither(viewerId, u.id);
+    return contactKnown;
+  };
+  const allow = (setting) => {
+    if (setting === 'nobody') return false;
+    if (setting === 'contacts') return isContact();
+    return true;
+  };
+  if (!allow(u.privacy_photo || 'everyone')) base.avatarUrl = null;
+  if (!allow(u.privacy_about || 'everyone')) base.about = '';
+  if ((u.privacy_last_seen || 'everyone') === 'contacts' && !isContact()) base.lastSeen = null;
+  return base;
+}
+
 function isMember(chatId, userId) {
   return Boolean(
     db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId)
@@ -52,7 +82,7 @@ function getMemberIds(chatId) {
     .map((r) => r.user_id);
 }
 
-function getMembers(chatId) {
+function getMembers(chatId, viewerId) {
   return db
     .prepare(
       `SELECT u.*, m.role FROM chat_members m
@@ -60,7 +90,7 @@ function getMembers(chatId) {
        WHERE m.chat_id = ?`
     )
     .all(chatId)
-    .map((u) => ({ ...publicUser(u), role: u.role }));
+    .map((u) => ({ ...publicUserFor(u, viewerId), role: u.role }));
 }
 
 function serializeMessage(row) {
@@ -108,7 +138,7 @@ function getChatSummary(chatId, userId) {
     .get(chatId, userId);
   if (!membership) return null;
 
-  const members = getMembers(chatId);
+  const members = getMembers(chatId, userId);
   let title = chat.name;
   let avatarUrl = chat.avatar_url;
   let otherUser = null;
@@ -225,4 +255,6 @@ module.exports = {
   isBlockedEither,
   contactsOf,
   canAddToGroup,
+  sharesChat,
+  publicUserFor,
 };

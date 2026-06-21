@@ -4,6 +4,7 @@ const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../auth-middleware');
 const { publicUser, now } = require('../util');
+const { publicUserFor } = require('../chat-service');
 const bus = require('../bus');
 
 const router = express.Router();
@@ -67,48 +68,47 @@ router.get('/search', (req, res) => {
        ORDER BY display_name LIMIT 20`
     )
     .all(req.user.id, like, like, q);
-  res.json({ users: rows.map(publicUser) });
+  res.json({ users: rows.map((u) => publicUserFor(u, req.user.id)) });
 });
+
+function privacyOf(u) {
+  return {
+    lastSeen: u.privacy_last_seen || 'everyone',
+    readReceipts: u.read_receipts !== 0,
+    groups: u.privacy_groups || 'everyone',
+    photo: u.privacy_photo || 'everyone',
+    about: u.privacy_about || 'everyone',
+  };
+}
 
 // Privacy settings (read).
 router.get('/me/privacy', (req, res) => {
-  res.json({
-    privacy: {
-      lastSeen: req.user.privacy_last_seen || 'everyone',
-      readReceipts: req.user.read_receipts !== 0,
-      groups: req.user.privacy_groups || 'everyone',
-    },
-  });
+  res.json({ privacy: privacyOf(req.user) });
 });
 
 // Privacy settings (update).
 router.patch('/me/privacy', (req, res) => {
-  const { lastSeen, readReceipts, groups } = req.body || {};
+  const { lastSeen, readReceipts, groups, photo, about } = req.body || {};
   const valid = ['everyone', 'contacts', 'nobody'];
-  if (typeof lastSeen === 'string' && valid.includes(lastSeen)) {
-    db.prepare('UPDATE users SET privacy_last_seen = ? WHERE id = ?').run(lastSeen, req.user.id);
-  }
+  const setStr = (col, val) => {
+    if (typeof val === 'string' && valid.includes(val)) db.prepare(`UPDATE users SET ${col} = ? WHERE id = ?`).run(val, req.user.id);
+  };
+  setStr('privacy_last_seen', lastSeen);
+  setStr('privacy_groups', groups);
+  setStr('privacy_photo', photo);
+  setStr('privacy_about', about);
   if (typeof readReceipts === 'boolean') {
     db.prepare('UPDATE users SET read_receipts = ? WHERE id = ?').run(readReceipts ? 1 : 0, req.user.id);
   }
-  if (typeof groups === 'string' && valid.includes(groups)) {
-    db.prepare('UPDATE users SET privacy_groups = ? WHERE id = ?').run(groups, req.user.id);
-  }
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id);
-  res.json({
-    privacy: {
-      lastSeen: u.privacy_last_seen,
-      readReceipts: u.read_receipts !== 0,
-      groups: u.privacy_groups,
-    },
-  });
+  res.json({ privacy: privacyOf(u) });
 });
 
-// Get a single user's public profile.
+// Get a single user's public profile (viewer-aware privacy).
 router.get('/:id', (req, res) => {
   const u = db.prepare('SELECT * FROM users WHERE id = ?').get(req.params.id);
   if (!u) return res.status(404).json({ error: 'not found' });
-  res.json({ user: publicUser(u) });
+  res.json({ user: publicUserFor(u, req.user.id) });
 });
 
 // Update own profile.
