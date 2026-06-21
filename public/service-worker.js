@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v13';
+const CACHE = 'speedvox-shell-v14';
 const SHELL = [
   '/',
   '/index.html',
@@ -12,6 +12,7 @@ const SHELL = [
   '/js/api.js',
   '/js/mesh.js',
   '/js/calls.js',
+  '/js/groupcall.js',
   '/js/e2ee.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',

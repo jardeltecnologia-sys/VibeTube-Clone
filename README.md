@@ -23,9 +23,9 @@ de apagão ou queda do servidor central.
   grupo, adicionar/remover participantes, promover/rebaixar admins, mensagens de
   sistema e transferência automática de admin ao sair.
 - **Foto de perfil e de grupo** (upload de imagem).
-- **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só
-  sinaliza), com **TURN opcional** para redes restritivas e **histórico de
-  chamadas** (incl. perdidas/recusadas) registrado na conversa.
+- **Chamadas de voz e vídeo 1:1 e em grupo** (WebRTC — mídia peer-to-peer;
+  grupo via full-mesh), com **TURN opcional** para redes restritivas e
+  **histórico de chamadas** (incl. perdidas/recusadas) registrado na conversa.
 - **Mensagens de voz** (gravação com MediaRecorder e player no chat).
 - **Encontrar contatos** por nome de usuário, nome de exibição ou e-mail (sem agenda telefônica).
 - **Status de entrega**: 🕐 pendente, ✓ enviada, ✓✓ entregue, ✓✓ azul lida, ⚠ falhou (toque para reenviar).
@@ -114,6 +114,7 @@ speedvox/
     ├── js/app.js         # UI + estado + integração socket/mesh/chamadas
     ├── js/api.js         # cliente REST
     ├── js/calls.js       # chamadas de voz/vídeo 1:1 (WebRTC + UI)
+    ├── js/groupcall.js   # chamadas em grupo (full-mesh WebRTC + grade)
     ├── js/e2ee.js        # criptografia ponta-a-ponta (ECDH P-256 + AES-GCM)
     ├── js/mesh.js        # gerenciador de mesh WebRTC
     ├── service-worker.js # cache do app-shell

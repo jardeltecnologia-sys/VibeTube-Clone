@@ -116,6 +116,22 @@ function setup(httpServer) {
     }
   }
 
+  // chatId -> Set<userId> currently in a group call (full-mesh WebRTC).
+  const groupCalls = new Map();
+
+  function gcallLeave(chatId, leaverId) {
+    const room = groupCalls.get(chatId);
+    if (!room || !room.has(leaverId)) return;
+    room.delete(leaverId);
+    for (const pid of room) io.to(`user:${pid}`).emit('gcall:peer-leave', { chatId, userId: leaverId });
+    if (room.size === 0) {
+      groupCalls.delete(chatId);
+      for (const memberId of getMemberIds(chatId)) {
+        io.to(`user:${memberId}`).emit('gcall:ended', { chatId });
+      }
+    }
+  }
+
   // Fire-and-forget Web Push for a new message.
   function notifyPush(chatId, sender, message) {
     if (!push.isEnabled()) return;
@@ -406,6 +422,40 @@ function setup(httpServer) {
       if (call) logCall(callId, call.answeredAt ? 'completed' : 'canceled');
     });
 
+    // --- Group calls: full-mesh WebRTC over a per-chat call room ---
+    socket.on('gcall:join', ({ chatId, media }, cb) => {
+      const chat = db.prepare('SELECT type FROM chats WHERE id = ?').get(chatId);
+      if (!chat || chat.type !== 'group' || !isMember(chatId, userId)) {
+        if (typeof cb === 'function') cb({ error: 'forbidden' });
+        return;
+      }
+      const callMedia = media === 'video' ? 'video' : 'audio';
+      let room = groupCalls.get(chatId);
+      const firstJoin = !room || room.size === 0;
+      if (!room) { room = new Set(); groupCalls.set(chatId, room); }
+      const existing = [...room];
+      room.add(userId);
+      // The newcomer offers to everyone already present.
+      if (typeof cb === 'function') cb({ participants: existing });
+      for (const pid of existing) {
+        io.to(`user:${pid}`).emit('gcall:peer-join', { chatId, userId, media: callMedia });
+      }
+      // Ring the rest of the group when a call starts.
+      if (firstJoin) {
+        for (const memberId of getMemberIds(chatId)) {
+          if (memberId === userId || isBlockedEither(userId, memberId)) continue;
+          io.to(`user:${memberId}`).emit('gcall:incoming', {
+            chatId, from: publicUser(socket.user), media: callMedia,
+          });
+        }
+      }
+    });
+    socket.on('gcall:signal', ({ chatId, to, signal }) => {
+      if (!to) return;
+      io.to(`user:${to}`).emit('gcall:signal', { chatId, from: userId, signal });
+    });
+    socket.on('gcall:leave', ({ chatId }) => gcallLeave(chatId, userId));
+
     socket.on('disconnect', () => {
       const set = online.get(userId);
       if (set) {
@@ -414,13 +464,17 @@ function setup(httpServer) {
           online.delete(userId);
           db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(now(), userId);
           broadcastPresence(userId, 'offline');
-          // End any call this user was part of.
+          // End any 1:1 call this user was part of.
           for (const [cid, call] of activeCalls) {
             if (call.callerId === userId || call.calleeId === userId) {
               const other = call.callerId === userId ? call.calleeId : call.callerId;
               io.to(`user:${other}`).emit('call:ended', { from: userId, callId: cid });
               logCall(cid, call.answeredAt ? 'completed' : (call.calleeId === userId ? 'missed' : 'canceled'));
             }
+          }
+          // Leave any group calls.
+          for (const [cid, room] of groupCalls) {
+            if (room.has(userId)) gcallLeave(cid, userId);
           }
         }
       }

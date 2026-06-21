@@ -353,6 +353,23 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .call-btn.accept { background: var(--accent); }
 .call-btn.hangup { background: var(--danger); }
 
+/* ---------- GROUP CALLS ---------- */
+.gcall-overlay { position: fixed; inset: 0; z-index: 200; background: #04130e;
+  display: flex; flex-direction: column; }
+.gcall-grid { flex: 1; display: grid; gap: 6px; padding: 10px; align-content: center; }
+.gcall-tile { position: relative; background: #000; border-radius: 12px; overflow: hidden;
+  aspect-ratio: 3/4; max-height: 100%; }
+.gcall-tile video { width: 100%; height: 100%; object-fit: cover; }
+.gcall-name { position: absolute; bottom: 6px; left: 8px; color: #fff; font-size: 13px;
+  background: rgba(0,0,0,.4); padding: 2px 8px; border-radius: 8px; }
+.gcall-controls { display: flex; justify-content: center; gap: 18px; padding: 18px; }
+.gcall-incoming { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  z-index: 210; background: var(--panel-3); color: var(--text); padding: 14px 18px;
+  border-radius: 14px; display: flex; align-items: center; gap: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+  flex-wrap: wrap; max-width: 92vw; }
+.gcall-incoming .btn-primary { margin: 0; padding: 8px 18px; }
+.gcall-dismiss { color: var(--text-dim); padding: 8px 14px; }
+
 /* ---------- STATUS / STORIES ---------- */
 .net-indicator.has-status, #status-btn.has-status { color: var(--accent); }
 #status-btn.has-status { position: relative; }

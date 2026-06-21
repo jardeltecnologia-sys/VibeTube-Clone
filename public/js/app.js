@@ -1,6 +1,7 @@
 import { api, getToken, setToken } from './api.js';
 import { MeshManager } from './mesh.js';
 import { CallManager } from './calls.js';
+import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
 
 // ------------------------------------------------------------------ state
@@ -281,15 +282,28 @@ function setupMesh() {
 
 function setupCalls() {
   state.calls = new CallManager({ socket: state.socket, selfId: state.me.id, iceServers: state.iceServers });
+  state.groupCalls = new GroupCallManager({
+    socket: state.socket,
+    selfId: state.me.id,
+    iceServers: state.iceServers,
+    getUser: (uid) => {
+      for (const c of state.chats.values()) {
+        const m = (c.members || []).find((x) => x.id === uid);
+        if (m) return m;
+      }
+      return { displayName: '' };
+    },
+  });
 }
 
 function startCall(media) {
   const chat = state.chats.get(state.activeChatId);
   if (!chat) return;
-  if (chat.type !== 'direct' || !chat.otherUser) {
-    toast('Chamadas em grupo ainda não são suportadas');
+  if (chat.type === 'group') {
+    state.groupCalls.start(chat.id, media);
     return;
   }
+  if (!chat.otherUser) return;
   state.calls.startCall(chat.otherUser, media);
 }
 
@@ -538,8 +552,7 @@ function presenceText(chat) {
 
 function renderChatHeader(chat) {
   if (!chat) return;
-  // Calls are 1:1 only — hide the buttons for groups.
-  $('#chat-header-actions').style.display = chat.type === 'direct' ? 'flex' : 'none';
+  $('#chat-header-actions').style.display = 'flex'; // 1:1 and group calls supported
   avatarBg($('#chat-header-avatar'), chat.avatarUrl, chat.title);
   $('#chat-header-title').textContent = chat.title;
   const sub = $('#chat-header-sub');
