@@ -676,13 +676,20 @@ function renderMessages(keepScroll) {
     parts.push(meta);
 
     if (m.reactions && m.reactions.length) {
-      const emojis = [...new Set(m.reactions.map((r) => r.emoji))].join('');
-      parts.push(el('div', { class: 'msg-reactions' }, `${emojis} ${m.reactions.length}`));
+      const counts = new Map();
+      for (const r of m.reactions) counts.set(r.emoji, (counts.get(r.emoji) || 0) + 1);
+      const mineEmoji = (m.reactions.find((r) => r.user_id === state.me.id) || {}).emoji;
+      const label = [...counts.entries()].map(([e, n]) => `${e}${n > 1 ? n : ''}`).join(' ');
+      parts.push(el('div', {
+        class: `msg-reactions${mineEmoji ? ' mine' : ''}`,
+        title: 'Alterar reação',
+        onclick: (e) => { e.stopPropagation(); openReactionPicker(e.currentTarget, m); },
+      }, label));
     }
 
     const actions = el('div', { class: 'msg-actions' },
       m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
-      m.deleted ? '' : el('button', { title: 'Reagir', onclick: () => react(m, '👍') }, '👍'),
+      m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, '😊'),
       m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
       mine && !m.deleted && m.type === 'text'
         ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
@@ -713,6 +720,37 @@ function clearReply() {
 function react(m, emoji) { state.socket.emit('message:react', { messageId: m.id, emoji }); }
 function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
+}
+
+// Quick reaction set (like WhatsApp) and a larger set for the composer picker.
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🙏'];
+const EMOJI_SET = [
+  '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤩', '🥳',
+  '😉', '🙂', '😇', '🤔', '😴', '😭', '😢', '😡', '🥺', '😱',
+  '👍', '👎', '👏', '🙏', '💪', '🤝', '👌', '✌️', '🤞', '🔥',
+  '❤️', '🧡', '💛', '💚', '💙', '💜', '🖤', '💔', '💯', '✨',
+  '🎉', '🎈', '🎁', '🥂', '☕', '🍕', '⚽', '🚀', '🌟', '😅',
+];
+
+// Generic emoji popup anchored to an element. onPick receives the chosen emoji.
+function openEmojiPopup(anchor, emojis, onPick) {
+  document.querySelector('.emoji-popup')?.remove();
+  const popup = el('div', { class: 'emoji-popup' });
+  for (const e of emojis) {
+    popup.append(el('button', { class: 'emoji-opt', onclick: (ev) => {
+      ev.stopPropagation(); popup.remove(); onPick(e);
+    } }, e));
+  }
+  document.body.append(popup);
+  const r = anchor.getBoundingClientRect();
+  popup.style.top = `${Math.max(8, r.top - popup.offsetHeight - 6)}px`;
+  popup.style.left = `${Math.min(Math.max(8, r.left - 40), window.innerWidth - popup.offsetWidth - 8)}px`;
+  const close = (ev) => { if (!popup.contains(ev.target)) { popup.remove(); document.removeEventListener('click', close); } };
+  setTimeout(() => document.addEventListener('click', close), 0);
+}
+
+function openReactionPicker(anchor, m) {
+  openEmojiPopup(anchor, QUICK_REACTIONS, (emoji) => react(m, emoji));
 }
 
 // Begin editing one of my own text messages (reuses the reply bar as an editor).
@@ -976,6 +1014,16 @@ function setupComposer() {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
   };
+  $('#emoji-btn').onclick = (e) => openEmojiPopup(e.currentTarget, EMOJI_SET, (emoji) => {
+    const input = $('#message-input');
+    const start = input.selectionStart ?? input.value.length;
+    const end = input.selectionEnd ?? input.value.length;
+    input.value = input.value.slice(0, start) + emoji + input.value.slice(end);
+    input.focus();
+    const pos = start + emoji.length;
+    input.setSelectionRange(pos, pos);
+    input.dispatchEvent(new Event('input'));
+  });
   $('#attach-btn').onclick = () => $('#file-input').click();
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {

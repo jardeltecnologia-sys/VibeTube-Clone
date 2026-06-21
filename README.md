@@ -35,7 +35,7 @@ de apagão ou queda do servidor central.
 - **Indicador "digitando…"**.
 - **Presença** online / visto por último.
 - **Envio de mídia** (imagens e arquivos até 25 MB).
-- **Responder, reagir, editar, encaminhar e apagar mensagens** (para todos).
+- **Responder, reagir (seletor de emoji), editar, encaminhar e apagar mensagens** (para todos).
 - **Contadores de não lidas** e ordenação por atividade.
 - **Organização de conversas**: fixar (no topo), arquivar e silenciar — estado
   individual por usuário.
