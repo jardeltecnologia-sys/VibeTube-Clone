@@ -3,6 +3,7 @@ import { MeshManager } from './mesh.js';
 import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
+import * as ratchet from './ratchet.js';
 import { qrSVG } from './qrcode.js';
 
 // ------------------------------------------------------------------ state
@@ -361,15 +362,77 @@ function chatIsEncrypted(chat) {
   return Boolean(chat && chat.type === 'direct' && state.keyCache.get(chat.id));
 }
 
+// ---- Double Ratchet sessions (forward secrecy) for direct chats ----
+const ratchetLocks = new Map(); // chatId -> tail promise (serialize state mutations)
+const ratchetKey = (chatId) => `speedvox_ratchet_${state.me.id}_${chatId}`;
+
+function withRatchetLock(chatId, fn) {
+  const prev = ratchetLocks.get(chatId) || Promise.resolve();
+  const next = prev.then(fn, fn);
+  ratchetLocks.set(chatId, next.catch(() => {}));
+  return next;
+}
+
+async function loadRatchet(chat) {
+  if (!state.e2eeReady || !chat || chat.type !== 'direct' || !chat.otherUser) return null;
+  const raw = localStorage.getItem(ratchetKey(chat.id));
+  if (raw) { try { return await ratchet.deserialize(raw); } catch { /* rebuild below */ } }
+  let pk = chat.otherUser.publicKey;
+  if (!pk) { try { const { user } = await api.getUser(chat.otherUser.id); pk = user.publicKey; chat.otherUser.publicKey = pk; } catch {} }
+  if (!pk) return null;
+  const bs = await e2ee.ratchetBootstrap(pk);
+  if (!bs) return null;
+  const st = bs.role === 'alice'
+    ? await ratchet.initAlice(bs.sk, bs.peerPubRaw)
+    : await ratchet.initBob(bs.sk, bs.myDH);
+  localStorage.setItem(ratchetKey(chat.id), await ratchet.serialize(st));
+  return st;
+}
+
+async function saveRatchet(chatId, st) {
+  localStorage.setItem(ratchetKey(chatId), await ratchet.serialize(st));
+}
+
+// Returns a v2 envelope string, or null if the ratchet cannot send yet.
+function ratchetEncryptFor(chat, plaintext) {
+  return withRatchetLock(chat.id, async () => {
+    const st = await loadRatchet(chat);
+    if (!st || !ratchet.canSend(st)) return null;
+    const { header, ct } = await ratchet.ratchetEncrypt(st, plaintext);
+    await saveRatchet(chat.id, st);
+    return JSON.stringify({ v: 2, h: header, ct });
+  });
+}
+
+// Returns plaintext, or null on failure.
+function ratchetDecryptFor(chat, env) {
+  return withRatchetLock(chat.id, async () => {
+    const st = await loadRatchet(chat);
+    if (!st) return null;
+    const pt = await ratchet.ratchetDecrypt(st, env.h, env.ct);
+    await saveRatchet(chat.id, st);
+    return pt;
+  });
+}
+
 // Decrypt an incoming encrypted message in place, then refresh the views.
 async function decryptInto(m) {
   const chat = state.chats.get(m.chatId);
-  const key = await ensureChatKey(chat);
-  if (!key) { m._decryptFailed = true; }
-  else {
-    try { m._plain = await e2ee.decrypt(key, m.body); m._decryptFailed = false; }
-    catch { m._decryptFailed = true; }
-  }
+  let env = null;
+  try { env = JSON.parse(m.body); } catch {}
+  try {
+    if (env && env.v === 2) {
+      // Forward-secret (Double Ratchet) message.
+      const pt = await ratchetDecryptFor(chat, env);
+      if (pt != null) { m._plain = pt; m._decryptFailed = false; }
+      else m._decryptFailed = true;
+    } else {
+      // Legacy/static AES message (also used for edits/forwards).
+      const key = await ensureChatKey(chat);
+      if (!key) m._decryptFailed = true;
+      else { m._plain = await e2ee.decrypt(key, m.body); m._decryptFailed = false; }
+    }
+  } catch { m._decryptFailed = true; }
   if (m.chatId === state.activeChatId) renderMessages(true);
   renderChatList();
 }
@@ -1140,14 +1203,24 @@ async function sendMessage() {
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
 
-  // Encrypt end-to-end for direct chats whose peer has a published key.
+  // Encrypt end-to-end for direct chats. Prefer the forward-secret Double
+  // Ratchet; fall back to the static key (e.g. responder's first message) or
+  // plaintext when the peer has no published key.
   let plainText;
-  const key = await ensureChatKey(chat);
-  if (key) {
-    const env = await e2ee.encrypt(key, body);
-    payload.body = JSON.stringify(env);
-    payload.encrypted = true;
-    plainText = body;
+  if (chat && chat.type === 'direct') {
+    const ratEnv = await ratchetEncryptFor(chat, body);
+    if (ratEnv) {
+      payload.body = ratEnv;
+      payload.encrypted = true;
+      plainText = body;
+    } else {
+      const key = await ensureChatKey(chat);
+      if (key) {
+        payload.body = JSON.stringify(await e2ee.encrypt(key, body));
+        payload.encrypted = true;
+        plainText = body;
+      }
+    }
   }
 
   // Input may have changed during async encryption; only clear if unchanged.

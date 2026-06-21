@@ -99,3 +99,35 @@ export async function decrypt(key, envelope) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: ub64(env.iv) }, key, ub64(env.ct));
   return new TextDecoder().decode(pt);
 }
+
+// Bootstrap material for the Double Ratchet: the shared root secret (from the
+// static identity ECDH), the role, the peer's identity public (raw), and our
+// identity key re-imported for ECDH deriveBits (used as the responder's first
+// ratchet key). Both peers compute the same secret and opposite roles.
+export async function ratchetBootstrap(peerPublicKeyString) {
+  if (!isAvailable() || !identity) return null;
+  const saved = JSON.parse(localStorage.getItem(KEYSTORE) || 'null');
+  if (!saved) return null;
+  const C = { name: 'ECDH', namedCurve: 'P-256' };
+  const myPriv = await crypto.subtle.importKey('jwk', saved.privateJwk, C, true, ['deriveBits']);
+  const myPub = await crypto.subtle.importKey('jwk', saved.publicJwk, C, true, []);
+  const myPubRaw = b64(new Uint8Array(await crypto.subtle.exportKey('raw', myPub)));
+
+  const peerJwk = typeof peerPublicKeyString === 'string' ? JSON.parse(peerPublicKeyString) : peerPublicKeyString;
+  const peerPub = await crypto.subtle.importKey('jwk', peerJwk, C, true, []);
+  const peerPubRaw = b64(new Uint8Array(await crypto.subtle.exportKey('raw', peerPub)));
+
+  const dhBits = new Uint8Array(await crypto.subtle.deriveBits({ name: 'ECDH', public: peerPub }, myPriv, 256));
+  const hk = await crypto.subtle.importKey('raw', dhBits, 'HKDF', false, ['deriveBits']);
+  const sk = new Uint8Array(await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode('SpeedVox-Root') },
+    hk, 256
+  ));
+
+  return {
+    role: myPubRaw > peerPubRaw ? 'alice' : 'bob',
+    sk,
+    peerPubRaw,
+    myDH: { priv: myPriv, pub: myPub, pubRaw: myPubRaw },
+  };
+}

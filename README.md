@@ -16,9 +16,10 @@ de apagão ou queda do servidor central.
 
 - **Cadastro sem telefone** — e-mail/senha (com hash bcrypt) ou Google Sign-In (OAuth 2.0).
 - **Mensagens em tempo real** via WebSocket (Socket.IO).
-- **Criptografia ponta-a-ponta (E2EE)** nas conversas 1:1 — ECDH P-256 + AES-GCM
-  (Web Crypto). A chave privada nunca sai do dispositivo; o servidor só
-  armazena/relaia texto cifrado.
+- **Criptografia ponta-a-ponta (E2EE) com forward secrecy** nas conversas 1:1 —
+  **Double Ratchet** (estilo Signal) sobre identidades ECDH P-256, com AES-GCM
+  por mensagem (Web Crypto). A chave privada nunca sai do dispositivo; o servidor
+  só armazena/relaia texto cifrado.
 - **Conversas 1:1 e em grupo**, com **gestão de grupos**: renomear, foto do
   grupo, adicionar/remover participantes, promover/rebaixar admins, mensagens de
   sistema e transferência automática de admin ao sair.
@@ -123,7 +124,8 @@ speedvox/
     ├── js/api.js         # cliente REST
     ├── js/calls.js       # chamadas de voz/vídeo 1:1 (WebRTC + UI)
     ├── js/groupcall.js   # chamadas em grupo (full-mesh WebRTC + grade)
-    ├── js/e2ee.js        # criptografia ponta-a-ponta (ECDH P-256 + AES-GCM)
+    ├── js/e2ee.js        # E2EE: identidade ECDH + bootstrap do ratchet
+    ├── js/ratchet.js     # Double Ratchet (forward secrecy) — verificado em testes
     ├── js/mesh.js        # gerenciador de mesh WebRTC
     ├── service-worker.js # cache do app-shell
     └── manifest.webmanifest
@@ -164,26 +166,33 @@ servidor quando a conectividade voltasse.
 
 ## 🔒 Segurança
 
-- **Criptografia ponta-a-ponta (E2EE)** nas conversas 1:1: cada usuário tem um par
-  de chaves **ECDH P-256** (Web Crypto). A chave privada fica apenas no
-  dispositivo (localStorage); só a chave pública é publicada no servidor. Ambos os
-  lados derivam o mesmo segredo via `ECDH(minhaPrivada, públicaDoOutro)` e cada
-  mensagem é cifrada com **AES-GCM** (IV aleatório por mensagem). O servidor só
-  armazena/relaia o texto cifrado — não consegue ler as mensagens.
+- **Criptografia ponta-a-ponta (E2EE) com forward secrecy** nas conversas 1:1:
+  um **Double Ratchet** (estilo Signal) sobre as identidades **ECDH P-256**. Cada
+  mensagem usa uma chave derivada de uma cadeia que avança (HKDF/HMAC) e é cifrada
+  com **AES-GCM** tendo o cabeçalho como dado autenticado; as chaves antigas são
+  descartadas, então comprometer o estado atual não revela mensagens passadas
+  (forward secrecy) e o canal se recupera após um novo passo de ratchet DH
+  (post-compromise security). O segredo inicial vem do ECDH estático das
+  identidades; mensagens fora de ordem usam chaves "puladas". A chave privada
+  nunca sai do dispositivo; o servidor só relaia/armazena texto cifrado. Edições
+  e encaminhamentos usam a chave estática (não são forward-secret).
 - Senhas com **bcrypt**; sessões com **JWT** (expiração de 30 dias).
 - Sockets autenticados no handshake; cada operação valida a participação no chat.
 - Uploads limitados a 25 MB.
-- **Limitações conhecidas (no roteiro):** o E2EE usa um segredo ECDH estático por
-  par — é ponta-a-ponta, mas **ainda não tem forward secrecy** (próximo passo:
-  Double Ratchet). Conversas em **grupo** e **mídia/voz** ainda não são cifradas
-  fim-a-fim (apenas em trânsito via TLS). Verificação de impressão digital de
-  chave (detecção de troca de chave) também está no roteiro.
+- **Limitações conhecidas (no roteiro):** o E2EE com Double Ratchet é
+  efetivamente **por dispositivo** — vincular um segundo aparelho gera uma nova
+  identidade e não compartilha o estado do ratchet (multidispositivo com E2EE
+  exige sessões por dispositivo). Conversas em **grupo** e **mídia/voz/chamadas**
+  ainda não são cifradas fim-a-fim (apenas em trânsito via TLS). Falta também a
+  troca de chaves inicial completa (X3DH com prekeys) e a verificação de
+  impressão digital de chave (números de segurança).
 
 ---
 
 ## 🗺️ Próximos passos
 
-- Forward secrecy via **Double Ratchet** (sobre as chaves de identidade já existentes).
+- Troca de chaves inicial **X3DH** (prekeys assinadas/de uso único) e sessões
+  E2EE **por dispositivo** (multidispositivo).
 - E2EE para **grupos** (sender keys) e para **mídia/mensagens de voz**.
 - Verificação de chave (números de segurança / QR) entre contatos.
 - Chamadas de voz/vídeo em grupo (o 1:1 já está implementado).
