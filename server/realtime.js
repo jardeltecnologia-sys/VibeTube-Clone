@@ -6,8 +6,12 @@ const config = require('./config');
 const { verifyToken, id, now, publicUser } = require('./util');
 const {
   isMember, getMemberIds, serializeMessage, getChatSummary, iBlocked, isBlockedEither,
+  findOrCreateDirectChat,
 } = require('./chat-service');
 const push = require('./push');
+
+// In-flight calls, keyed by callId. Used to log history and detect missed calls.
+const activeCalls = new Map();
 
 // Privacy-aware push preview: never reveals content of encrypted messages.
 function pushPreview(message) {
@@ -71,6 +75,44 @@ function setup(httpServer) {
     for (const memberId of getMemberIds(chatId)) {
       if (memberId === exceptUserId) continue;
       io.to(`user:${memberId}`).emit(event, payload);
+    }
+  }
+
+  // Finalize a call: record it as a message in the 1:1 chat (history) and, for a
+  // missed/rejected call, push the callee. status: completed|missed|rejected|canceled.
+  function logCall(callId, status) {
+    const call = activeCalls.get(callId);
+    if (!call || call.logged) return;
+    call.logged = true;
+    if (call.ringTimer) clearTimeout(call.ringTimer);
+    activeCalls.delete(callId);
+
+    // Both participants must be real users to record the call.
+    const bothExist = db.prepare('SELECT COUNT(*) AS c FROM users WHERE id IN (?, ?)')
+      .get(call.callerId, call.calleeId).c === 2;
+    if (!bothExist) return;
+
+    const chatId = findOrCreateDirectChat(call.callerId, call.calleeId);
+    const duration = call.answeredAt ? Math.max(0, Math.round((now() - call.answeredAt) / 1000)) : 0;
+    const body = JSON.stringify({ media: call.media, status, duration });
+    const msgId = id();
+    const ts = now();
+    db.prepare(
+      `INSERT INTO messages (id, chat_id, sender_id, type, body, created_at)
+       VALUES (?, ?, ?, 'call', ?, ?)`
+    ).run(msgId, chatId, call.callerId, body, ts);
+    const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
+    for (const memberId of [call.callerId, call.calleeId]) {
+      io.to(`user:${memberId}`).emit('message:new', { message });
+      io.to(`user:${memberId}`).emit('chat:update', getChatSummary(chatId, memberId));
+    }
+    if ((status === 'missed' || status === 'rejected') && push.isEnabled() && !isOnline(call.calleeId)) {
+      const caller = db.prepare('SELECT display_name FROM users WHERE id = ?').get(call.callerId);
+      push.sendToUser(call.calleeId, {
+        title: caller ? caller.display_name : 'SpeedVox',
+        body: status === 'missed' ? '📞 Chamada perdida' : '📞 Chamada recusada',
+        chatId, tag: `call-${chatId}`,
+      }).catch(() => {});
     }
   }
 
@@ -312,22 +354,43 @@ function setup(httpServer) {
     // The server only relays signaling; media flows peer-to-peer.
     socket.on('call:invite', ({ to, callId, media, chatId }) => {
       if (!to || !callId) return;
-      if (!isOnline(to)) {
-        socket.emit('call:unavailable', { callId, reason: 'offline' });
+      const callMedia = media === 'video' ? 'video' : 'audio';
+      // Blocking: cannot call a contact you blocked (or who blocked you).
+      if (isBlockedEither(userId, to)) {
+        socket.emit('call:unavailable', { callId, reason: 'blocked' });
         return;
       }
+      if (!isOnline(to)) {
+        // Recipient offline: log a missed call straight away and push them.
+        activeCalls.set(callId, { callerId: userId, calleeId: to, media: callMedia, startedAt: now() });
+        socket.emit('call:unavailable', { callId, reason: 'offline' });
+        logCall(callId, 'missed');
+        return;
+      }
+      const ringTimer = setTimeout(() => {
+        const call = activeCalls.get(callId);
+        if (call && !call.answeredAt) {
+          io.to(`user:${to}`).emit('call:ended', { from: userId, callId });
+          io.to(`user:${userId}`).emit('call:ended', { from: to, callId });
+          logCall(callId, 'missed');
+        }
+      }, config.callRingMs);
+      activeCalls.set(callId, { callerId: userId, calleeId: to, media: callMedia, startedAt: now(), ringTimer });
       io.to(`user:${to}`).emit('call:incoming', {
         from: publicUser(socket.user),
         callId,
-        media: media === 'video' ? 'video' : 'audio',
+        media: callMedia,
         chatId,
       });
     });
     socket.on('call:accept', ({ to, callId }) => {
+      const call = activeCalls.get(callId);
+      if (call) { call.answeredAt = now(); if (call.ringTimer) clearTimeout(call.ringTimer); }
       io.to(`user:${to}`).emit('call:accepted', { from: userId, callId });
     });
     socket.on('call:reject', ({ to, callId }) => {
       io.to(`user:${to}`).emit('call:rejected', { from: userId, callId });
+      logCall(callId, 'rejected');
     });
     socket.on('call:sdp', ({ to, callId, sdp }) => {
       io.to(`user:${to}`).emit('call:sdp', { from: userId, callId, sdp });
@@ -337,6 +400,8 @@ function setup(httpServer) {
     });
     socket.on('call:end', ({ to, callId }) => {
       io.to(`user:${to}`).emit('call:ended', { from: userId, callId });
+      const call = activeCalls.get(callId);
+      if (call) logCall(callId, call.answeredAt ? 'completed' : 'canceled');
     });
 
     socket.on('disconnect', () => {
@@ -347,6 +412,14 @@ function setup(httpServer) {
           online.delete(userId);
           db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(now(), userId);
           broadcastPresence(userId, 'offline');
+          // End any call this user was part of.
+          for (const [cid, call] of activeCalls) {
+            if (call.callerId === userId || call.calleeId === userId) {
+              const other = call.callerId === userId ? call.calleeId : call.callerId;
+              io.to(`user:${other}`).emit('call:ended', { from: userId, callId: cid });
+              logCall(cid, call.answeredAt ? 'completed' : (call.calleeId === userId ? 'missed' : 'canceled'));
+            }
+          }
         }
       }
     });

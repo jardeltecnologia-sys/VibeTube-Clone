@@ -19,6 +19,7 @@ const state = {
   online: navigator.onLine,
   e2eeReady: false,
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
+  iceServers: null,
 };
 
 // ------------------------------------------------------------------ helpers
@@ -79,12 +80,31 @@ function toast(msg) {
   setTimeout(() => t.remove(), 2600);
 }
 
+function parseCall(m) {
+  try { return JSON.parse(m.body); } catch { return { media: 'audio', status: 'completed', duration: 0 }; }
+}
+function fmtDuration(s) {
+  const mm = Math.floor(s / 60);
+  const ss = String(s % 60).padStart(2, '0');
+  return `${mm}:${ss}`;
+}
+function callLabel(m) {
+  const c = parseCall(m);
+  const icon = c.media === 'video' ? '📹' : '📞';
+  const mine = m.senderId === state.me.id; // I was the caller
+  if (c.status === 'missed') return `${icon} ${mine ? 'Chamada não atendida' : 'Chamada perdida'}`;
+  if (c.status === 'rejected') return `${icon} Chamada recusada`;
+  if (c.status === 'canceled') return `${icon} Chamada cancelada`;
+  return `${icon} ${c.media === 'video' ? 'Chamada de vídeo' : 'Chamada de voz'}${c.duration ? ' · ' + fmtDuration(c.duration) : ''}`;
+}
+
 function lastMessagePreview(m) {
   if (!m) return '';
   if (m.deleted) return '🚫 Mensagem apagada';
   if (m.type === 'image') return '📷 Foto';
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
+  if (m.type === 'call') return callLabel(m);
   if (m.type === 'system') return m.body || '';
   if (m.encrypted) {
     const known = findMessageById(m.id);
@@ -247,6 +267,7 @@ function setupMesh() {
   state.mesh = new MeshManager({
     selfId: state.me.id,
     sendSignal: (to, signal) => state.socket.emit('mesh:signal', { to, signal }),
+    iceServers: state.iceServers,
   });
   state.mesh.addEventListener('status', updateNetIndicator);
   // Messages arriving directly over a peer link (used when the server is down).
@@ -257,7 +278,7 @@ function setupMesh() {
 }
 
 function setupCalls() {
-  state.calls = new CallManager({ socket: state.socket, selfId: state.me.id });
+  state.calls = new CallManager({ socket: state.socket, selfId: state.me.id, iceServers: state.iceServers });
 }
 
 function startCall(media) {
@@ -546,6 +567,21 @@ function updateComposerState(chat) {
   $('#block-banner').classList.toggle('hidden', !blocked);
 }
 
+// A call-log entry shown inline in the conversation (like WhatsApp).
+function callMessageNode(m) {
+  const c = parseCall(m);
+  const missed = c.status === 'missed' || c.status === 'rejected' || c.status === 'canceled';
+  const chat = state.chats.get(m.chatId);
+  const callBack = el('button', { class: 'call-log-btn', title: 'Ligar de volta',
+    onclick: () => { if (chat && chat.otherUser) state.calls.startCall(chat.otherUser, c.media); } },
+    c.media === 'video' ? '🎥' : '📞');
+  return el('div', { class: `call-log${missed ? ' missed' : ''}` },
+    el('span', { class: 'call-log-icon' }, c.media === 'video' ? '📹' : '📞'),
+    el('span', { class: 'call-log-text' }, callLabel(m)),
+    el('span', { class: 'call-log-time' }, fmtTime(m.createdAt)),
+    callBack);
+}
+
 // ------------------------------------------------------------------ render: messages
 function tickFor(message, chat) {
   if (message.senderId !== state.me.id || chat.type === 'system') return '';
@@ -586,6 +622,10 @@ function renderMessages(keepScroll) {
     }
     if (m.type === 'system') {
       container.append(el('div', { class: 'system-msg' }, m.body));
+      continue;
+    }
+    if (m.type === 'call') {
+      container.append(callMessageNode(m));
       continue;
     }
     const mine = m.senderId === state.me.id;
@@ -1438,6 +1478,9 @@ async function startApp(user) {
       }
     } catch { /* encryption stays off; messaging still works in plaintext */ }
   }
+
+  // Fetch ICE servers (STUN + optional TURN) so calls work behind restrictive NATs.
+  try { state.iceServers = (await (await fetch('/api/ice')).json()).iceServers; } catch { state.iceServers = null; }
 
   connectSocket();
   setupMesh();

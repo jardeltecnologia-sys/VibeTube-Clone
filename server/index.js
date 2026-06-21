@@ -35,6 +35,11 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'speedvox', google: config.google.enabled, time: Date.now() });
 });
 
+// WebRTC ICE servers (STUN + optional TURN) for calls and the mesh.
+app.get('/api/ice', (req, res) => {
+  res.json({ iceServers: config.iceServers });
+});
+
 // Uploaded media
 if (!fs.existsSync(config.uploadDir)) fs.mkdirSync(config.uploadDir, { recursive: true });
 app.use('/uploads', express.static(config.uploadDir, { maxAge: '7d' }));

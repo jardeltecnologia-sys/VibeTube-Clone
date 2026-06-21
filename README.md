@@ -23,7 +23,9 @@ de apagão ou queda do servidor central.
   grupo, adicionar/remover participantes, promover/rebaixar admins, mensagens de
   sistema e transferência automática de admin ao sair.
 - **Foto de perfil e de grupo** (upload de imagem).
-- **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só sinaliza).
+- **Chamadas de voz e vídeo 1:1** (WebRTC — mídia peer-to-peer, servidor só
+  sinaliza), com **TURN opcional** para redes restritivas e **histórico de
+  chamadas** (incl. perdidas/recusadas) registrado na conversa.
 - **Mensagens de voz** (gravação com MediaRecorder e player no chat).
 - **Encontrar contatos** por nome de usuário, nome de exibição ou e-mail (sem agenda telefônica).
 - **Status de entrega**: 🕐 pendente, ✓ enviada, ✓✓ entregue, ✓✓ azul lida, ⚠ falhou (toque para reenviar).
@@ -74,6 +76,8 @@ outro usuário.
 | `JWT_SECRET` | Segredo para assinar os tokens de sessão. **Troque em produção.** |
 | `SWEEP_MS` | Intervalo (ms) da varredura de mensagens temporárias vencidas (padrão `15000`). |
 | `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` | Chaves Web Push. Se vazias, são geradas e persistidas em `data/vapid.json` no primeiro boot. |
+| `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | Servidor TURN para chamadas atrás de NAT restritivo (opcional). STUN já vem ligado. |
+| `CALL_RING_MS` | Tempo de toque (ms) antes de uma chamada não atendida virar "perdida" (padrão `45000`). |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Credenciais do Google Sign-In (opcional). |
 
 ### Ativando o login com Google

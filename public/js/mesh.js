@@ -10,13 +10,14 @@
 // This module is intentionally transport-agnostic: give it a `signal(to, data)`
 // sender and feed it incoming signals, and it manages the peer connections.
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class MeshManager extends EventTarget {
-  constructor({ selfId, sendSignal }) {
+  constructor({ selfId, sendSignal, iceServers }) {
     super();
     this.selfId = selfId;
     this.sendSignal = sendSignal; // (toUserId, signalData) => void
+    this.iceServers = iceServers && iceServers.length ? iceServers : DEFAULT_ICE;
     this.peers = new Map(); // userId -> { pc, channel, ready }
     this.enabled = false;
   }
@@ -35,7 +36,7 @@ export class MeshManager extends EventTarget {
 
   _createPeer(userId, initiator) {
     if (this.peers.has(userId)) return this.peers.get(userId);
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     const entry = { pc, channel: null, ready: false };
     this.peers.set(userId, entry);
 

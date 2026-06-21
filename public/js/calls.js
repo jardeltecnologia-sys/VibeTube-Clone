@@ -2,12 +2,13 @@
 // The Socket.IO server only relays signaling (SDP/ICE); audio and video flow
 // directly peer-to-peer. The module owns its own full-screen call UI.
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class CallManager {
-  constructor({ socket, selfId }) {
+  constructor({ socket, selfId, iceServers }) {
     this.socket = socket;
     this.selfId = selfId;
+    this.iceServers = iceServers && iceServers.length ? iceServers : DEFAULT_ICE;
     this.pc = null;
     this.localStream = null;
     this.callId = null;
@@ -44,7 +45,7 @@ export class CallManager {
   }
 
   _createPeer() {
-    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
     this.pc = pc;
     for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
     pc.onicecandidate = (e) => {

@@ -212,6 +212,17 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .system-msg { align-self: center; background: var(--panel-2); color: var(--text-dim);
   font-size: 13px; padding: 6px 14px; border-radius: 8px; margin: 8px 0; text-align: center; }
 
+.call-log { align-self: center; display: flex; align-items: center; gap: 10px;
+  background: var(--panel-2); border-radius: 10px; padding: 8px 14px; margin: 6px 0;
+  font-size: 14px; max-width: 80%; }
+.call-log-icon { font-size: 18px; }
+.call-log.missed .call-log-icon, .call-log.missed .call-log-text { color: var(--danger); }
+.call-log-text { flex: 1; }
+.call-log-time { color: var(--text-dim); font-size: 12px; }
+.call-log-btn { width: 34px; height: 34px; border-radius: 50%; background: var(--accent);
+  color: #04130e; font-size: 15px; display: inline-flex; align-items: center; justify-content: center; }
+.call-log-btn:hover { background: var(--accent-dark); }
+
 .msg { max-width: 75%; padding: 6px 9px 8px; border-radius: 8px; position: relative;
   font-size: 14.5px; line-height: 1.4; word-wrap: break-word; }
 .msg.in { align-self: flex-start; background: var(--bubble-in); border-top-left-radius: 2px; }

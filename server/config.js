@@ -48,6 +48,26 @@ const config = {
   vapidPublic: process.env.VAPID_PUBLIC_KEY || '',
   vapidPrivate: process.env.VAPID_PRIVATE_KEY || '',
   vapidSubject: process.env.VAPID_SUBJECT || 'mailto:admin@speedvox.app',
+  // WebRTC ICE: STUN is always on; a TURN relay (for restrictive NATs) is optional.
+  turnUrl: process.env.TURN_URL || '',
+  turnUsername: process.env.TURN_USERNAME || '',
+  turnCredential: process.env.TURN_CREDENTIAL || '',
+  stunUrl: process.env.STUN_URL || 'stun:stun.l.google.com:19302',
+  // How long an unanswered call rings before it counts as missed.
+  callRingMs: parseInt(process.env.CALL_RING_MS || '45000', 10),
 };
+
+// Assemble the ICE server list sent to clients.
+config.iceServers = (() => {
+  const list = [{ urls: config.stunUrl }];
+  if (config.turnUrl) {
+    list.push({
+      urls: config.turnUrl,
+      username: config.turnUsername || undefined,
+      credential: config.turnCredential || undefined,
+    });
+  }
+  return list;
+})();
 
 module.exports = config;
