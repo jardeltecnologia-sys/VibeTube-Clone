@@ -80,6 +80,7 @@ function serializeMessage(row) {
     encrypted: Boolean(row.encrypted),
     forwarded: Boolean(row.forwarded),
     expiresAt: row.expires_at || null,
+    mentions: row.mentions ? JSON.parse(row.mentions) : [],
     createdAt: row.created_at,
     editedAt: row.edited_at,
     deleted: Boolean(row.deleted),
@@ -126,6 +127,12 @@ function getChatSummary(chatId, userId) {
 
   const blocked = chat.type === 'direct' && otherUser ? iBlocked(userId, otherUser.id) : false;
 
+  let pinnedMessage = null;
+  if (chat.pinned_message_id) {
+    const pm = db.prepare('SELECT * FROM messages WHERE id = ?').get(chat.pinned_message_id);
+    if (pm && !pm.deleted) pinnedMessage = serializeMessage(pm);
+  }
+
   return {
     id: chat.id,
     type: chat.type,
@@ -135,6 +142,7 @@ function getChatSummary(chatId, userId) {
     otherUser,
     createdBy: chat.created_by,
     blocked,
+    pinnedMessage,
     lastMessage: serializeMessage(lastRow),
     unread,
     lastReadAt: membership.last_read_at,

@@ -120,6 +120,15 @@ CREATE TABLE IF NOT EXISTS status_views (
   FOREIGN KEY (viewer_id) REFERENCES users(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_statuses_user ON statuses(user_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS starred (
+  user_id    TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, message_id),
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
+);
 `);
 
 // Migrations for databases created before these columns existed.
@@ -134,6 +143,8 @@ ensureColumn('chat_members', 'archived', 'archived INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chat_members', 'pinned', 'pinned INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chat_members', 'muted_until', 'muted_until INTEGER NOT NULL DEFAULT 0');
 ensureColumn('chats', 'disappearing_timer', 'disappearing_timer INTEGER NOT NULL DEFAULT 0');
+ensureColumn('chats', 'pinned_message_id', 'pinned_message_id TEXT');
 ensureColumn('messages', 'expires_at', 'expires_at INTEGER');
+ensureColumn('messages', 'mentions', 'mentions TEXT');
 
 module.exports = db;

@@ -190,7 +190,25 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .empty-state h2 { color: var(--text); font-weight: 500; margin-bottom: 10px; }
 .empty-state p { max-width: 420px; font-size: 14px; line-height: 1.5; }
 
-.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.chat-view { flex: 1; display: flex; flex-direction: column; min-height: 0; position: relative; }
+.pinned-bar { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  background: var(--panel-2); border-bottom: 1px solid var(--divider); border-left: 4px solid var(--accent); }
+.pinned-icon { font-size: 16px; }
+.pinned-body { flex: 1; min-width: 0; display: flex; flex-direction: column; cursor: pointer; }
+.pinned-label { font-size: 12px; color: var(--accent); font-weight: 600; }
+.pinned-text { font-size: 13px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mention { color: var(--accent); font-weight: 600; }
+.star-label { color: #f0b232; font-size: 11px; }
+.msg.flash { animation: flash 1.2s ease; }
+@keyframes flash { 0%, 100% { background: var(--bubble-in); } 30% { background: #3a4a52; } }
+.msg.out.flash { animation: flashOut 1.2s ease; }
+@keyframes flashOut { 0%, 100% { background: var(--bubble-out); } 30% { background: #0a7d68; } }
+.mention-suggest { position: absolute; bottom: 64px; left: 14px; right: 14px; max-width: 360px;
+  background: var(--panel-2); border-radius: 10px; box-shadow: 0 8px 28px rgba(0,0,0,.5);
+  overflow: hidden; z-index: 20; }
+.mention-opt { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+.mention-opt:hover { background: var(--panel-3); }
+.mention-user { color: var(--text-dim); font-size: 13px; margin-left: auto; }
 .chat-header {
   display: flex; align-items: center; gap: 8px;
   padding: 9px 14px; background: var(--panel-2); border-left: 1px solid var(--divider);

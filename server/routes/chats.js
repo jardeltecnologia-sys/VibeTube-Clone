@@ -95,7 +95,11 @@ router.get('/:id/messages', (req, res) => {
        ORDER BY m.created_at DESC LIMIT ?`
     )
     .all(req.params.id, before, now(), req.user.id, limit);
-  res.json({ messages: rows.reverse().map(serializeMessage) });
+  // Annotate which messages this user has starred.
+  const starredIds = new Set(
+    db.prepare('SELECT message_id FROM starred WHERE user_id = ?').all(req.user.id).map((r) => r.message_id)
+  );
+  res.json({ messages: rows.reverse().map((m) => ({ ...serializeMessage(m), starred: starredIds.has(m.id) })) });
 });
 
 // Set the disappearing-messages timer for a chat (any participant). 0 = off.
@@ -198,6 +202,27 @@ function setMembershipFlag(req, res, column, value) {
   bus.pushChatUpdate(req.params.id);
   res.json({ chat: getChatSummary(req.params.id, req.user.id) });
 }
+
+// Pin (or unpin) a message in a chat. Groups: admins only. Direct: any member.
+router.post('/:id/pin-message', (req, res) => {
+  const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
+  if (!chat || !isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });
+  if (chat.type === 'group') {
+    const me = db.prepare('SELECT role FROM chat_members WHERE chat_id = ? AND user_id = ?').get(req.params.id, req.user.id);
+    if (!me || me.role !== 'admin') return res.status(403).json({ error: 'apenas admins' });
+  }
+  const { messageId } = req.body || {};
+  if (messageId) {
+    const m = db.prepare('SELECT id FROM messages WHERE id = ? AND chat_id = ? AND deleted = 0').get(messageId, req.params.id);
+    if (!m) return res.status(404).json({ error: 'mensagem não encontrada' });
+    db.prepare('UPDATE chats SET pinned_message_id = ? WHERE id = ?').run(messageId, req.params.id);
+    bus.systemMessage(req.params.id, `${req.user.display_name} fixou uma mensagem`, req.user.id);
+  } else {
+    db.prepare('UPDATE chats SET pinned_message_id = NULL WHERE id = ?').run(req.params.id);
+    bus.pushChatUpdate(req.params.id);
+  }
+  res.json({ chat: getChatSummary(req.params.id, req.user.id) });
+});
 
 router.post('/:id/pin', (req, res) => setMembershipFlag(req, res, 'pinned', req.body && req.body.pinned ? 1 : 0));
 router.post('/:id/archive', (req, res) => setMembershipFlag(req, res, 'archived', req.body && req.body.archived ? 1 : 0));

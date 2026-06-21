@@ -135,8 +135,12 @@ function setup(httpServer) {
   // Fire-and-forget Web Push for a new message.
   function notifyPush(chatId, sender, message) {
     if (!push.isEnabled()) return;
-    const targets = push.recipientsFor(chatId, sender.id, isOnline);
-    if (!targets.length) return;
+    const targets = new Set(push.recipientsFor(chatId, sender.id, isOnline));
+    // Mentions notify even if the chat is muted (still only when offline).
+    for (const uid of message.mentions || []) {
+      if (uid !== sender.id && !isOnline(uid) && isMember(chatId, uid)) targets.add(uid);
+    }
+    if (!targets.size) return;
     const chat = db.prepare('SELECT type, name FROM chats WHERE id = ?').get(chatId);
     const isGroup = chat && chat.type === 'group';
     const title = isGroup ? (chat.name || 'Grupo') : sender.display_name;
@@ -196,7 +200,7 @@ function setup(httpServer) {
     // --- Send a message ---
     socket.on('message:send', (payload, cb) => {
       try {
-        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded } =
+        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded, mentions } =
           payload || {};
         if (!isMember(chatId, userId)) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
@@ -225,9 +229,12 @@ function setup(httpServer) {
         const chatRow = db.prepare('SELECT disappearing_timer FROM chats WHERE id = ?').get(chatId);
         const timer = chatRow ? chatRow.disappearing_timer : 0;
         const expiresAt = timer > 0 ? ts + timer * 1000 : null;
+        // Keep only mentions that are actual members of this chat.
+        const validMentions = Array.isArray(mentions)
+          ? [...new Set(mentions)].filter((uid) => isMember(chatId, uid)) : [];
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -241,6 +248,7 @@ function setup(httpServer) {
           encrypted ? 1 : 0,
           forwarded ? 1 : 0,
           expiresAt,
+          validMentions.length ? JSON.stringify(validMentions) : null,
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));

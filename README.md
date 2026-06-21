@@ -36,6 +36,9 @@ de apagão ou queda do servidor central.
 - **Presença** online / visto por último.
 - **Envio de mídia** (imagens e arquivos até 25 MB).
 - **Responder, reagir (seletor de emoji), editar, encaminhar e apagar mensagens** (para todos).
+- **Favoritar mensagens** (aba dedicada), **fixar mensagem** na conversa (barra no
+  topo) e **menções @** em grupos (autocomplete, realce e notificação mesmo se
+  silenciado).
 - **Contadores de não lidas** e ordenação por atividade.
 - **Organização de conversas**: fixar (no topo), arquivar e silenciar — estado
   individual por usuário.

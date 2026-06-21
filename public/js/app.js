@@ -21,6 +21,7 @@ const state = {
   e2eeReady: false,
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
   iceServers: null,
+  composerMentions: new Map(), // displayName -> userId, for the current draft
 };
 
 // ------------------------------------------------------------------ helpers
@@ -356,6 +357,8 @@ async function loadChats() {
 async function openChat(chatId) {
   state.activeChatId = chatId;
   state.replyTo = null;
+  state.composerMentions.clear();
+  $('#mention-suggest').classList.add('hidden');
   $('#reply-preview').classList.add('hidden');
   $('#empty-state').classList.add('hidden');
   $('#chat-view').classList.remove('hidden');
@@ -568,6 +571,7 @@ function renderChatHeader(chat) {
     sub.classList.remove('typing');
   }
   updateComposerState(chat);
+  renderPinnedBar(chat);
 }
 
 function renderTyping() {
@@ -680,11 +684,12 @@ function renderMessages(keepScroll) {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
-        parts.push(el('div', { class: 'msg-body' }, text));
+        parts.push(mentionNode(text, m, chat));
       }
     }
 
     const meta = el('div', { class: 'msg-meta' },
+      m.starred && !m.deleted ? el('span', { class: 'star-label', title: 'Favorita' }, '★') : '',
       m.editedAt && !m.deleted ? el('span', { class: 'edited-label' }, 'editada') : '',
       fmtTime(m.createdAt),
       mine && !m.deleted ? tickFor(m, chat) : '');
@@ -702,16 +707,20 @@ function renderMessages(keepScroll) {
       }, label));
     }
 
+    const myRole = (chat.members.find((x) => x.id === state.me.id) || {}).role;
+    const canPin = !m.deleted && (chat.type === 'direct' || myRole === 'admin');
     const actions = el('div', { class: 'msg-actions' },
       m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
       m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, '😊'),
+      m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, m.starred ? '★' : '☆'),
       m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
+      canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, '📌') : '',
       mine && !m.deleted && m.type === 'text'
         ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
       mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, '🗑') : '');
     parts.push(actions);
 
-    container.append(el('div', { class: `msg ${mine ? 'out' : 'in'}` }, ...parts));
+    container.append(el('div', { class: `msg ${mine ? 'out' : 'in'}`, 'data-mid': m.id }, ...parts));
   }
 
   if (!keepScroll || atBottom) container.scrollTop = container.scrollHeight;
@@ -735,6 +744,75 @@ function clearReply() {
 function react(m, emoji) { state.socket.emit('message:react', { messageId: m.id, emoji }); }
 function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
+}
+
+async function toggleStar(m) {
+  try {
+    const { starred } = await api.starMessage(m.id, !m.starred);
+    m.starred = starred;
+    renderMessages(true);
+  } catch (e) { toast('Falha ao favoritar'); }
+}
+
+async function pinMessage(m) {
+  try {
+    const { chat } = await api.pinMessage(m.chatId, m.id);
+    state.chats.set(chat.id, chat);
+    renderPinnedBar(chat);
+    toast('Mensagem fixada');
+  } catch (e) { toast(e.message || 'Falha ao fixar'); }
+}
+
+async function unpinMessage(chatId) {
+  try {
+    const { chat } = await api.pinMessage(chatId, null);
+    state.chats.set(chat.id, chat);
+    renderPinnedBar(chat);
+  } catch (e) { toast(e.message || 'Falha ao desafixar'); }
+}
+
+// Build a message-body node, highlighting @mentions in group chats.
+function mentionNode(text, m, chat) {
+  if (chat.type !== 'group' || !m.mentions || !m.mentions.length) {
+    return el('div', { class: 'msg-body' }, text);
+  }
+  const names = m.mentions
+    .map((uid) => (chat.members.find((x) => x.id === uid) || {}).displayName)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length); // longest first to avoid partial overlaps
+  if (!names.length) return el('div', { class: 'msg-body' }, text);
+  const esc = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
+  const re = new RegExp(`@(${esc})`, 'g');
+  const node = el('div', { class: 'msg-body' });
+  let last = 0; let match;
+  while ((match = re.exec(text)) !== null) {
+    if (match.index > last) node.append(document.createTextNode(text.slice(last, match.index)));
+    node.append(el('span', { class: 'mention' }, match[0]));
+    last = match.index + match[0].length;
+  }
+  if (last < text.length) node.append(document.createTextNode(text.slice(last)));
+  return node;
+}
+
+// The pinned-message bar above the conversation.
+function renderPinnedBar(chat) {
+  const bar = $('#pinned-bar');
+  if (!chat || !chat.pinnedMessage) { bar.classList.add('hidden'); return; }
+  const pm = chat.pinnedMessage;
+  bar.classList.remove('hidden');
+  bar.innerHTML = '';
+  const sender = (chat.members || []).find((x) => x.id === pm.senderId);
+  bar.append(
+    el('span', { class: 'pinned-icon' }, '📌'),
+    el('div', { class: 'pinned-body', onclick: () => scrollToMessage(pm.id) },
+      el('span', { class: 'pinned-label' }, 'Mensagem fixada'),
+      el('span', { class: 'pinned-text' }, (sender ? sender.displayName + ': ' : '') + (pm.encrypted ? '🔒 mensagem' : lastMessagePreview(pm)))),
+    el('button', { class: 'icon-btn', title: 'Desafixar', onclick: () => unpinMessage(chat.id) }, '✕'));
+}
+
+function scrollToMessage(messageId) {
+  const node = document.querySelector(`[data-mid="${messageId}"]`);
+  if (node) { node.scrollIntoView({ behavior: 'smooth', block: 'center' }); node.classList.add('flash'); setTimeout(() => node.classList.remove('flash'), 1200); }
 }
 
 // Quick reaction set (like WhatsApp) and a larger set for the composer picker.
@@ -766,6 +844,54 @@ function openEmojiPopup(anchor, emojis, onPick) {
 
 function openReactionPicker(anchor, m) {
   openEmojiPopup(anchor, QUICK_REACTIONS, (emoji) => react(m, emoji));
+}
+
+// @mention autocomplete (group chats).
+function updateMentionSuggest() {
+  const box = $('#mention-suggest');
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat || chat.type !== 'group') { box.classList.add('hidden'); return; }
+  const input = $('#message-input');
+  const upto = input.value.slice(0, input.selectionStart);
+  const match = upto.match(/(?:^|\s)@([\w.]*)$/);
+  if (!match) { box.classList.add('hidden'); return; }
+  const q = match[1].toLowerCase();
+  const candidates = chat.members
+    .filter((mb) => mb.id !== state.me.id &&
+      (mb.displayName.toLowerCase().includes(q) || mb.username.toLowerCase().includes(q)))
+    .slice(0, 6);
+  if (!candidates.length) { box.classList.add('hidden'); return; }
+  box.innerHTML = '';
+  for (const mb of candidates) {
+    const av = el('span', { class: 'avatar sm' });
+    avatarBg(av, mb.avatarUrl, mb.displayName);
+    box.append(el('div', { class: 'mention-opt', onclick: () => pickMention(mb, match[1].length) },
+      av, el('span', {}, mb.displayName), el('span', { class: 'mention-user' }, '@' + mb.username)));
+  }
+  box.classList.remove('hidden');
+}
+
+function pickMention(mb, tokenLen) {
+  const input = $('#message-input');
+  const pos = input.selectionStart;
+  const before = input.value.slice(0, pos - tokenLen - 1); // drop "@token"
+  const after = input.value.slice(pos);
+  const insert = `@${mb.displayName} `;
+  input.value = before + insert + after;
+  const np = (before + insert).length;
+  input.focus();
+  input.setSelectionRange(np, np);
+  state.composerMentions.set(mb.displayName, mb.id);
+  $('#mention-suggest').classList.add('hidden');
+}
+
+// Collect mention userIds whose @name still appears in the text.
+function collectMentions(text) {
+  const out = [];
+  for (const [name, uid] of state.composerMentions) {
+    if (text.includes('@' + name)) out.push(uid);
+  }
+  return out;
 }
 
 // Begin editing one of my own text messages (reuses the reply bar as an editor).
@@ -881,6 +1007,7 @@ function optimisticMessage(payload) {
     mediaName: payload.mediaName || null,
     mediaMime: payload.mediaMime || null,
     replyTo: payload.replyTo || null,
+    mentions: payload.mentions || [],
     forwarded: Boolean(payload.forwarded),
     encrypted: Boolean(payload.encrypted),
     createdAt: Date.now(),
@@ -970,6 +1097,14 @@ async function sendMessage() {
   const payload = { chatId: state.activeChatId, body, type: 'text' };
   if (state.replyTo) payload.replyTo = state.replyTo.id;
 
+  // Group @mentions.
+  if (chat && chat.type === 'group') {
+    const mentions = collectMentions(body);
+    if (mentions.length) payload.mentions = mentions;
+  }
+  state.composerMentions.clear();
+  $('#mention-suggest').classList.add('hidden');
+
   // Encrypt end-to-end for direct chats whose peer has a published key.
   let plainText;
   const key = await ensureChatKey(chat);
@@ -1015,6 +1150,7 @@ function setupComposer() {
   input.addEventListener('input', () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    updateMentionSuggest();
     if (!state.activeChatId) return;
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: true });
     clearTimeout(typingTimer);
@@ -1275,10 +1411,31 @@ function profileModal() {
       el('div', { class: 'field-label' }, 'Usuário'),
       el('div', {}, '@' + state.me.username)),
     el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); showStarredMessages(); } }, '★ Mensagens favoritas')),
+    el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
       meshToggleRow()));
   const footer = el('div', { class: 'modal-footer' }, save);
   const backdrop = modalShell('Perfil', body, footer);
+}
+
+async function showStarredMessages() {
+  let messages = [];
+  try { messages = (await api.starredMessages()).messages; } catch { return toast('Falha ao carregar favoritas'); }
+  const body = el('div', { class: 'modal-body' });
+  if (!messages.length) body.append(el('p', { class: 'auth-hint' }, 'Nenhuma mensagem favorita ainda.'));
+  for (const m of messages) {
+    const chat = state.chats.get(m.chatId);
+    const row = el('div', { class: 'user-result', onclick: () => { backdrop.remove(); if (chat) openChat(m.chatId).then(() => scrollToMessage(m.id)); } },
+      el('div', { class: 'user-result-body' },
+        el('div', { class: 'user-result-name' }, chat ? chat.title : 'Conversa'),
+        el('div', { class: 'user-result-sub' }, m.encrypted ? '🔒 mensagem cifrada' : lastMessagePreview(m))),
+      el('button', { class: 'icon-btn', title: 'Desfavoritar', onclick: async (e) => {
+        e.stopPropagation(); await api.starMessage(m.id, false); row.remove();
+      } }, '★'));
+    body.append(row);
+  }
+  const backdrop = modalShell('Mensagens favoritas', body);
 }
 
 function meshToggleRow() {
