@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">SpeedVox</string>
+    <string name="title_activity_main">SpeedVox</string>
+    <string name="package_name">app.speedvox.mobile</string>
+    <string name="custom_url_scheme">app.speedvox.mobile</string>
+</resources>

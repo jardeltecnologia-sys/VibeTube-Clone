@@ -1,7 +1,7 @@
 {
   "appId": "app.speedvox.mobile",
   "appName": "SpeedVox",
-  "webDir": "../public",
+  "webDir": "www",
   "server": {
     "url": "https://SEU-SERVIDOR-SPEEDVOX.exemplo.com",
     "cleartext": false,

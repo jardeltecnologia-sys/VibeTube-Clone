@@ -1,0 +1,17 @@
+{
+  "name": "speedvox-mobile",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Casca nativa (Capacitor) do SpeedVox para Android — carrega o servidor hospedado.",
+  "scripts": {
+    "add:android": "cap add android",
+    "sync": "cap sync android"
+  },
+  "dependencies": {
+    "@capacitor/core": "^6.1.2",
+    "@capacitor/android": "^6.1.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.1.2"
+  }
+}
