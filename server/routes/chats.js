@@ -88,11 +88,13 @@ router.get('/:id/messages', (req, res) => {
   const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
   const rows = db
     .prepare(
-      `SELECT * FROM messages WHERE chat_id = ? AND created_at < ?
-         AND (expires_at IS NULL OR expires_at > ?)
-       ORDER BY created_at DESC LIMIT ?`
+      `SELECT m.* FROM messages m WHERE m.chat_id = ? AND m.created_at < ?
+         AND (m.expires_at IS NULL OR m.expires_at > ?)
+         AND NOT EXISTS (SELECT 1 FROM blocks b
+           WHERE b.blocker_id = ? AND b.blocked_id = m.sender_id AND m.created_at >= b.created_at)
+       ORDER BY m.created_at DESC LIMIT ?`
     )
-    .all(req.params.id, before, now(), limit);
+    .all(req.params.id, before, now(), req.user.id, limit);
   res.json({ messages: rows.reverse().map(serializeMessage) });
 });
 

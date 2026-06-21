@@ -531,11 +531,19 @@ function renderChatHeader(chat) {
     sub.textContent = prefix + presenceText(chat);
     sub.classList.remove('typing');
   }
+  updateComposerState(chat);
 }
 
 function renderTyping() {
   const chat = state.chats.get(state.activeChatId);
   if (chat) renderChatHeader(chat);
+}
+
+// Show the block banner instead of the composer when I have blocked this contact.
+function updateComposerState(chat) {
+  const blocked = Boolean(chat && chat.blocked);
+  $('#composer').classList.toggle('hidden', blocked);
+  $('#block-banner').classList.toggle('hidden', !blocked);
 }
 
 // ------------------------------------------------------------------ render: messages
@@ -947,6 +955,15 @@ function setupComposer() {
   $('#call-audio-btn').onclick = () => startCall('audio');
   $('#call-video-btn').onclick = () => startCall('video');
   $('#mic-btn').onclick = toggleVoiceRecording;
+  $('#unblock-btn').onclick = async () => {
+    const chat = state.chats.get(state.activeChatId);
+    if (!chat || !chat.otherUser) return;
+    await api.unblockUser(chat.otherUser.id);
+    const { chat: updated } = await api.getChat(chat.id);
+    state.chats.set(updated.id, updated);
+    updateComposerState(updated);
+    toast('Contato desbloqueado');
+  };
 }
 
 // ------------------------------------------------------------------ voice messages
@@ -1276,6 +1293,24 @@ function showChatInfo() {
     backdrop.remove();
   } }, isGroup ? 'Sair do grupo' : 'Apagar conversa');
 
+  // Block / unblock (direct chats only).
+  let blockBtn = '';
+  if (!isGroup && chat.otherUser) {
+    const setLabel = (b) => b ? 'Desbloquear contato' : 'Bloquear contato';
+    blockBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-top:10px' },
+      setLabel(chat.blocked));
+    blockBtn.onclick = async () => {
+      if (chat.blocked) await api.unblockUser(chat.otherUser.id);
+      else await api.blockUser(chat.otherUser.id);
+      const { chat: updated } = await api.getChat(chat.id);
+      state.chats.set(updated.id, updated);
+      chat.blocked = updated.blocked;
+      blockBtn.textContent = setLabel(updated.blocked);
+      updateComposerState(updated);
+      toast(updated.blocked ? 'Contato bloqueado' : 'Contato desbloqueado');
+    };
+  }
+
   const body = el('div', { class: 'modal-body' },
     big,
     titleNode,
@@ -1284,6 +1319,7 @@ function showChatInfo() {
     el('div', { class: 'field-label' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
     members,
     addBtn,
+    blockBtn,
     leave);
   const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);
   // Detach the live refresh listener when the modal closes.

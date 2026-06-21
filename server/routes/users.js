@@ -4,9 +4,55 @@ const express = require('express');
 const db = require('../db');
 const { requireAuth } = require('../auth-middleware');
 const { publicUser, now } = require('../util');
+const bus = require('../bus');
 
 const router = express.Router();
 router.use(requireAuth);
+
+// Find an existing direct chat between two users (without creating one).
+function directChatId(a, b) {
+  const row = db
+    .prepare(
+      `SELECT c.id FROM chats c
+       JOIN chat_members m1 ON m1.chat_id = c.id AND m1.user_id = ?
+       JOIN chat_members m2 ON m2.chat_id = c.id AND m2.user_id = ?
+       WHERE c.type = 'direct' LIMIT 1`
+    )
+    .get(a, b);
+  return row ? row.id : null;
+}
+
+// List the users I have blocked.
+router.get('/me/blocks', (req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT u.* FROM blocks b JOIN users u ON u.id = b.blocked_id
+       WHERE b.blocker_id = ? ORDER BY b.created_at DESC`
+    )
+    .all(req.user.id);
+  res.json({ users: rows.map(publicUser) });
+});
+
+// Block a user.
+router.post('/:id/block', (req, res) => {
+  if (req.params.id === req.user.id) return res.status(400).json({ error: 'não é possível bloquear a si mesmo' });
+  if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(req.params.id)) {
+    return res.status(404).json({ error: 'usuário não encontrado' });
+  }
+  db.prepare('INSERT OR IGNORE INTO blocks (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)')
+    .run(req.user.id, req.params.id, now());
+  const cid = directChatId(req.user.id, req.params.id);
+  if (cid) bus.pushChatUpdate(cid);
+  res.json({ ok: true });
+});
+
+// Unblock a user.
+router.post('/:id/unblock', (req, res) => {
+  db.prepare('DELETE FROM blocks WHERE blocker_id = ? AND blocked_id = ?').run(req.user.id, req.params.id);
+  const cid = directChatId(req.user.id, req.params.id);
+  if (cid) bus.pushChatUpdate(cid);
+  res.json({ ok: true });
+});
 
 // Search users by username, display name or email — contacts without phone numbers.
 router.get('/search', (req, res) => {

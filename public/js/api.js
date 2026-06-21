@@ -40,6 +40,9 @@ export const api = {
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
   getUser: (id) => request('GET', `/users/${id}`),
   updateProfile: (d) => request('PATCH', '/users/me', d),
+  blockUser: (id) => request('POST', `/users/${id}/block`),
+  unblockUser: (id) => request('POST', `/users/${id}/unblock`),
+  getBlocks: () => request('GET', '/users/me/blocks'),
 
   listChats: () => request('GET', '/chats'),
   openDirect: (userId) => request('POST', '/chats/direct', { userId }),

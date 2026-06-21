@@ -254,6 +254,10 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .reply-preview-name { color: var(--accent); font-weight: 600; font-size: 13px; }
 .reply-preview-text { color: var(--text-dim); font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
+.block-banner { display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 16px; background: var(--panel-2); color: var(--text-dim); font-size: 14px; }
+.block-banner button { color: var(--accent); font-weight: 600; }
+.block-banner button:hover { text-decoration: underline; }
 .composer { display: flex; align-items: flex-end; gap: 8px; padding: 10px 14px; background: var(--panel-2); }
 .composer textarea {
   flex: 1; resize: none; max-height: 120px; background: var(--panel-3);

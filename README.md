@@ -42,6 +42,8 @@ de apagão ou queda do servidor central.
   decifradas — o ciphertext nunca é exposto na busca.
 - **Mensagens temporárias**: timer por conversa (24h / 7d / 90d); o servidor
   remove as mensagens vencidas e avisa os participantes em tempo real.
+- **Bloquear contatos**: o bloqueado não chega até você (mensagens ocultas e
+  presença escondida), e ele vê a mensagem como "enviada" sem saber do bloqueio.
 - **PWA instalável** com service worker (app-shell em cache, abre offline).
 - **Modo mesh** (experimental) — canais WebRTC peer-to-peer entre usuários.
 

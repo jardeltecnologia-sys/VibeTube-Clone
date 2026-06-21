@@ -5,7 +5,7 @@ const db = require('./db');
 const config = require('./config');
 const { verifyToken, id, now, publicUser } = require('./util');
 const {
-  isMember, getMemberIds, serializeMessage, getChatSummary,
+  isMember, getMemberIds, serializeMessage, getChatSummary, iBlocked, isBlockedEither,
 } = require('./chat-service');
 
 // userId -> Set of socket ids
@@ -42,6 +42,7 @@ function setup(httpServer) {
       for (const memberId of getMemberIds(chatId)) {
         if (memberId === userId || notified.has(memberId)) continue;
         notified.add(memberId);
+        if (isBlockedEither(userId, memberId)) continue; // hide presence across a block
         io.to(`user:${memberId}`).emit('presence', {
           userId,
           status,
@@ -115,6 +116,16 @@ function setup(httpServer) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
           return;
         }
+        // Blocking: figure out the 1:1 partner and whether a block is in effect.
+        const others = getMemberIds(chatId).filter((m) => m !== userId);
+        const partner = others.length === 1 ? others[0] : null;
+        if (partner && iBlocked(userId, partner)) {
+          if (typeof cb === 'function') {
+            cb({ error: 'Você bloqueou este contato. Desbloqueie para enviar mensagens.' });
+          }
+          return;
+        }
+        const shieldedByPartner = partner ? iBlocked(partner, userId) : false;
         const msgType = type || 'text';
         if (msgType === 'text' && (!body || !body.trim())) {
           if (typeof cb === 'function') cb({ error: 'mensagem vazia' });
@@ -147,6 +158,16 @@ function setup(httpServer) {
           ts
         );
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
+
+        if (shieldedByPartner) {
+          // The recipient blocked me: I see the message as sent, but it is never
+          // delivered to them (and the block filter hides it from their views).
+          io.to(`user:${userId}`).emit('message:new', { message, clientId });
+          io.to(`user:${userId}`).emit('chat:update', getChatSummary(chatId, userId));
+          if (typeof cb === 'function') cb({ ok: true, message });
+          return;
+        }
+
         emitToChat(chatId, 'message:new', { message, clientId });
 
         // Push an updated chat summary to every member's sidebar.

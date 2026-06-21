@@ -3,6 +3,19 @@
 const db = require('./db');
 const { id, now, publicUser } = require('./util');
 
+// --- Blocking helpers ---
+function iBlocked(blockerId, blockedId) {
+  return Boolean(
+    db.prepare('SELECT 1 FROM blocks WHERE blocker_id = ? AND blocked_id = ?').get(blockerId, blockedId)
+  );
+}
+function blockRow(blockerId, blockedId) {
+  return db.prepare('SELECT * FROM blocks WHERE blocker_id = ? AND blocked_id = ?').get(blockerId, blockedId);
+}
+function isBlockedEither(a, b) {
+  return iBlocked(a, b) || iBlocked(b, a);
+}
+
 function isMember(chatId, userId) {
   return Boolean(
     db.prepare('SELECT 1 FROM chat_members WHERE chat_id = ? AND user_id = ?').get(chatId, userId)
@@ -81,16 +94,23 @@ function getChatSummary(chatId, userId) {
     avatarUrl = otherUser ? otherUser.avatarUrl : null;
   }
 
+  // Hide messages a blocked contact sent after I blocked them (from preview too).
+  const blockHide = `NOT EXISTS (SELECT 1 FROM blocks b
+       WHERE b.blocker_id = ? AND b.blocked_id = m.sender_id AND m.created_at >= b.created_at)`;
+
   const lastRow = db
-    .prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT 1')
-    .get(chatId);
+    .prepare(`SELECT m.* FROM messages m WHERE m.chat_id = ? AND ${blockHide}
+              ORDER BY m.created_at DESC LIMIT 1`)
+    .get(chatId, userId);
 
   const unread = db
     .prepare(
-      `SELECT COUNT(*) AS c FROM messages
-       WHERE chat_id = ? AND sender_id != ? AND created_at > ?`
+      `SELECT COUNT(*) AS c FROM messages m
+       WHERE m.chat_id = ? AND m.sender_id != ? AND m.created_at > ? AND ${blockHide}`
     )
-    .get(chatId, userId, membership.last_read_at).c;
+    .get(chatId, userId, membership.last_read_at, userId).c;
+
+  const blocked = chat.type === 'direct' && otherUser ? iBlocked(userId, otherUser.id) : false;
 
   return {
     id: chat.id,
@@ -100,6 +120,7 @@ function getChatSummary(chatId, userId) {
     members,
     otherUser,
     createdBy: chat.created_by,
+    blocked,
     lastMessage: serializeMessage(lastRow),
     unread,
     lastReadAt: membership.last_read_at,
@@ -168,4 +189,7 @@ module.exports = {
   getChatSummary,
   listChatsForUser,
   findOrCreateDirectChat,
+  iBlocked,
+  blockRow,
+  isBlockedEither,
 };
