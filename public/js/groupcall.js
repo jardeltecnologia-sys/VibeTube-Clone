@@ -68,24 +68,39 @@ export class GroupCallManager {
       if (e.candidate) this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { ice: e.candidate } });
     };
     pc.ontrack = (e) => { entry.stream = e.streams[0]; this._addTile(userId, e.streams[0], false); };
-    // 'disconnected' is usually transient — wait before dropping the peer.
-    const onState = () => {
-      const st = pc.connectionState || pc.iceConnectionState;
-      if (st === 'connected' || st === 'completed') {
-        if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
-      } else if (st === 'failed' || st === 'closed') {
-        this._dropPeer(userId);
-      } else if (st === 'disconnected') {
-        if (!entry.graceTimer) {
-          entry.graceTimer = setTimeout(() => {
-            const s2 = pc.connectionState || pc.iceConnectionState;
-            if (s2 !== 'connected' && s2 !== 'completed') this._dropPeer(userId);
-          }, 12000);
-        }
+
+    const onConnected = () => {
+      if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+    };
+    const onFailed = () => {
+      // Only drop if still the active entry for this userId.
+      if (this.peers.get(userId) === entry) this._dropPeer(userId);
+    };
+    const onDisconnected = () => {
+      if (!entry.graceTimer) {
+        entry.graceTimer = setTimeout(() => {
+          entry.graceTimer = null;
+          const connSt = pc.connectionState;
+          const iceSt = pc.iceConnectionState;
+          const ok = connSt === 'connected' || iceSt === 'connected' || iceSt === 'completed';
+          if (!ok && this.peers.get(userId) === entry) this._dropPeer(userId);
+        }, 20000);
       }
     };
-    pc.onconnectionstatechange = onState;
-    pc.oniceconnectionstatechange = onState;
+
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === 'connected') onConnected();
+      else if (st === 'failed' || st === 'closed') onFailed();
+      else if (st === 'disconnected') onDisconnected();
+    };
+    pc.oniceconnectionstatechange = () => {
+      const st = pc.iceConnectionState;
+      if (st === 'connected' || st === 'completed') onConnected();
+      else if (st === 'failed' || st === 'closed') onFailed();
+      else if (st === 'disconnected') onDisconnected();
+    };
+
     if (initiator) {
       pc.createOffer()
         .then((o) => { o.sdp = tuneAudioSdp(o.sdp); return pc.setLocalDescription(o); })
@@ -131,9 +146,12 @@ export class GroupCallManager {
     const entry = this.peers.get(userId);
     if (!entry) return;
     if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
-    try { entry.pc.close(); } catch {}
+    this.peers.delete(userId); // Remove BEFORE close() to prevent re-entry via state events.
+    const pc = entry.pc;
+    entry.pc = null;
+    try { pc.close(); } catch {}
     if (entry.tile) entry.tile.remove();
-    this.peers.delete(userId);
+    this._reflow();
   }
 
   hangup(remote = false) {
