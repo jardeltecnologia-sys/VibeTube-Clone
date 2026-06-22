@@ -2,8 +2,14 @@
 
 const express = require('express');
 const db = require('../db');
+const config = require('../config');
 const { requireAuth } = require('../auth-middleware');
 const { id, now } = require('../util');
+
+// Current member count of a group (used to enforce the size cap).
+function memberCount(chatId) {
+  return db.prepare('SELECT COUNT(*) AS n FROM chat_members WHERE chat_id = ?').get(chatId).n;
+}
 const {
   isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, serializeMessage, getMemberIds,
   canAddToGroup,
@@ -47,6 +53,9 @@ router.post('/group', (req, res) => {
   const { name, memberIds } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Informe o nome do grupo' });
   const members = Array.isArray(memberIds) ? [...new Set(memberIds)] : [];
+  if (members.length + 1 > config.groupMaxMembers) {
+    return res.status(400).json({ error: `Um grupo pode ter no máximo ${config.groupMaxMembers} participantes` });
+  }
 
   const chatId = id();
   const ts = now();
@@ -155,12 +164,15 @@ router.post('/:id/members', (req, res) => {
   );
   const added = [];
   const blockedByPrivacy = [];
+  let count = memberCount(req.params.id);
   for (const m of memberIds || []) {
+    if (count >= config.groupMaxMembers) break; // respect the size cap
     const u = db.prepare('SELECT display_name FROM users WHERE id = ?').get(m);
     if (!u || isMember(req.params.id, m)) continue;
     if (!canAddToGroup(m, req.user.id)) { blockedByPrivacy.push(u.display_name); continue; }
     ins.run(req.params.id, m, 'member', now());
     added.push(u.display_name);
+    count += 1;
   }
   if (added.length) {
     bus.systemMessage(req.params.id, `${req.user.display_name} adicionou ${added.join(', ')}`, req.user.id);

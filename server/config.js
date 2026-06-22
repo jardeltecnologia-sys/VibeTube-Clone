@@ -71,6 +71,11 @@ const config = {
   // (real clients always arrive through the proxy with a forwarded IP). Tuned
   // generously so people behind shared NAT/CGNAT can still register.
   registerMaxPerIp: parseInt(process.env.REGISTER_MAX_PER_IP || '20', 10),
+  // Upload guard: max file size and a denylist of dangerous extensions.
+  uploadMaxBytes: parseInt(process.env.UPLOAD_MAX_MB || '32', 10) * 1024 * 1024,
+  // Group size cap. Text messaging scales to large groups; group *calls* are
+  // full-mesh and only practical for small groups regardless of this number.
+  groupMaxMembers: parseInt(process.env.GROUP_MAX_MEMBERS || '1024', 10),
 };
 
 // E-mail verification is on when SMTP is configured (or in test mode).

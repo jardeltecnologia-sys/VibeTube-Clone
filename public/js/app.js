@@ -816,8 +816,18 @@ function renderMessages(keepScroll) {
       parts.push(el('div', { class: 'msg-body msg-deleted' }, '🚫 Esta mensagem foi apagada'));
     } else {
       if (m.type === 'image' && m.mediaUrl) {
-        parts.push(el('div', { class: 'msg-media' },
-          el('img', { src: m.mediaUrl, loading: 'lazy', onclick: () => window.open(m.mediaUrl, '_blank') })));
+        const showImg = () => el('img', { src: m.mediaUrl, loading: 'lazy', onclick: () => window.open(m.mediaUrl, '_blank') });
+        if (autoDownloadOn()) {
+          parts.push(el('div', { class: 'msg-media' }, showImg()));
+        } else {
+          // Auto-download off: show a tap-to-load placeholder (saves mobile data).
+          const wrap = el('div', { class: 'msg-media' });
+          const btn = el('button', { class: 'media-download-btn',
+            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
+            '⬇ Baixar foto');
+          wrap.append(btn);
+          parts.push(wrap);
+        }
       } else if (m.type === 'audio' && m.mediaUrl) {
         parts.push(el('div', { class: 'msg-audio' },
           el('audio', { controls: '', src: m.mediaUrl, preload: 'none' })));
@@ -1684,6 +1694,9 @@ function profileModal() {
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); linkDeviceModal(); } }, '📱 Vincular um dispositivo')),
     el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Baixar mídias automaticamente'),
+      autoDownloadRow()),
+    el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
       meshToggleRow()));
   const footer = el('div', { class: 'modal-footer' }, save);
@@ -1762,6 +1775,25 @@ async function showStarredMessages() {
     body.append(row);
   }
   const backdrop = modalShell('Mensagens favoritas', body);
+}
+
+// Per-device media auto-download preference (like WhatsApp). On by default.
+function autoDownloadOn() { return localStorage.getItem('speedvox_autodownload') !== '0'; }
+
+function autoDownloadRow() {
+  const on = autoDownloadOn();
+  const label = el('span', {}, on ? 'Ativado' : 'Só ao tocar em "Baixar"');
+  const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
+    on ? 'Desativar' : 'Ativar');
+  btn.onclick = () => {
+    const next = !autoDownloadOn();
+    localStorage.setItem('speedvox_autodownload', next ? '1' : '0');
+    label.textContent = next ? 'Ativado' : 'Só ao tocar em "Baixar"';
+    btn.textContent = next ? 'Desativar' : 'Ativar';
+    if (state.activeChatId) renderMessages();
+    toast(next ? 'Mídias baixam automaticamente' : 'Mídias só baixam quando você pedir');
+  };
+  return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
 }
 
 function meshToggleRow() {
