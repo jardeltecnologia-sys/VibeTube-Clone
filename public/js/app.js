@@ -1486,6 +1486,104 @@ function newChatModal() {
   setTimeout(() => search.focus(), 50);
 }
 
+// ------------------------------------------------------------------ contacts (agenda)
+async function contactsModal() {
+  const list = el('div', {});
+  const newBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px',
+    onclick: () => contactFormModal(null, null, refresh) }, '＋ Novo contato');
+  const body = el('div', { class: 'modal-body' }, newBtn, list);
+  const backdrop = modalShell('Contatos', body);
+
+  async function refresh() {
+    list.innerHTML = '';
+    let contacts = [];
+    try { ({ contacts } = await api.listContacts()); }
+    catch { list.append(el('p', { class: 'auth-hint' }, 'Falha ao carregar contatos.')); return; }
+    if (!contacts.length) {
+      list.append(el('p', { class: 'auth-hint' }, 'Nenhum contato salvo ainda. Toque em "Novo contato".'));
+      return;
+    }
+    for (const c of contacts) {
+      const avatar = el('span', { class: 'avatar sm' });
+      avatarBg(avatar, c.user && c.user.avatarUrl, c.displayName);
+      const subParts = [];
+      if (c.phone) subParts.push(c.phone);
+      if (c.email) subParts.push(c.email);
+      if (c.user) subParts.push('@' + c.user.username);
+      const edit = el('button', { class: 'icon-btn', title: 'Editar',
+        onclick: (e) => { e.stopPropagation(); contactFormModal(c, null, refresh); } }, '✎');
+      const del = el('button', { class: 'icon-btn', title: 'Excluir',
+        onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Excluir ${c.displayName}?`)) return;
+          await api.deleteContact(c.id); refresh();
+        } }, '🗑');
+      const row = el('div', { class: 'user-result' }, avatar,
+        el('div', { class: 'user-result-body' },
+          el('div', { class: 'user-result-name' }, c.displayName),
+          el('div', { class: 'user-result-sub' }, subParts.join(' · ') || 'Contato salvo')),
+        edit, del);
+      // Tapping a contact linked to a SpeedVox user opens the conversation.
+      if (c.userId) {
+        row.style.cursor = 'pointer';
+        row.onclick = async () => {
+          try {
+            const { chat } = await api.openDirect(c.userId);
+            state.chats.set(chat.id, chat);
+            state.socket.emit('chat:join', { chatId: chat.id });
+            backdrop.remove();
+            await openChat(chat.id);
+          } catch { toast('Não foi possível abrir a conversa'); }
+        };
+      }
+      list.append(row);
+    }
+  }
+  refresh();
+}
+
+// Add or edit a contact. `existing` = contact to edit; `prefill` = initial values
+// (e.g. when saving someone from a chat); `onSaved` = callback to refresh a list.
+function contactFormModal(existing, prefill, onSaved) {
+  const data = existing || prefill || {};
+  const name = el('input', { type: 'text', placeholder: 'Nome', value: data.displayName || '' });
+  const phone = el('input', { type: 'text', placeholder: 'Telefone (opcional)', value: data.phone || '' });
+  const email = el('input', { type: 'text', placeholder: 'E-mail (opcional)', value: data.email || '' });
+  const note = el('input', { type: 'text', placeholder: 'Observação (opcional)', value: data.note || '' });
+  const error = el('p', { class: 'auth-error' });
+
+  const save = el('button', { class: 'btn-primary', onclick: async () => {
+    if (!name.value.trim()) { error.textContent = 'Informe o nome do contato'; return; }
+    const payload = {
+      displayName: name.value.trim(),
+      phone: phone.value.trim(),
+      email: email.value.trim(),
+      note: note.value.trim(),
+    };
+    try {
+      if (existing) {
+        await api.updateContact(existing.id, payload);
+        toast('Contato atualizado');
+      } else {
+        if (prefill && prefill.userId) payload.userId = prefill.userId;
+        await api.addContact(payload);
+        toast('Contato salvo');
+      }
+      backdrop.remove();
+      if (onSaved) onSaved();
+    } catch (err) { error.textContent = err.message; }
+  } }, existing ? 'Salvar alterações' : 'Salvar contato');
+
+  const body = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Nome'), name,
+    el('div', { class: 'field-label' }, 'Telefone'), phone,
+    el('div', { class: 'field-label' }, 'E-mail'), email,
+    el('div', { class: 'field-label' }, 'Observação'), note,
+    error, save);
+  const backdrop = modalShell(existing ? 'Editar contato' : 'Novo contato', body);
+  setTimeout(() => name.focus(), 50);
+}
+
 function newGroupModal() {
   const selected = new Map();
   const nameInput = el('input', { type: 'text', placeholder: 'Nome do grupo' });
@@ -1799,6 +1897,17 @@ function showChatInfo() {
     };
   }
 
+  // Save the other person to my contacts (direct chats only).
+  let saveContactBtn = '';
+  if (!isGroup && chat.otherUser) {
+    saveContactBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-top:10px',
+      onclick: () => contactFormModal(null, {
+        displayName: chat.otherUser.displayName,
+        email: chat.otherUser.email || '',
+        userId: chat.otherUser.id,
+      }) }, '＋ Salvar nos contatos');
+  }
+
   const body = el('div', { class: 'modal-body' },
     big,
     titleNode,
@@ -1807,6 +1916,7 @@ function showChatInfo() {
     el('div', { class: 'field-label' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
     members,
     addBtn,
+    saveContactBtn,
     blockBtn,
     leave);
   const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);
@@ -2124,7 +2234,8 @@ async function startApp(user) {
   await loadChats();
   updateNetIndicator();
 
-  $('#new-chat-btn').onclick = newChatModal;
+  $('#fab-new-chat').onclick = newChatModal;
+  $('#contacts-btn').onclick = contactsModal;
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;

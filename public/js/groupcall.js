@@ -5,6 +5,7 @@
 // small groups and keeps media end-to-end between peers.
 
 import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+import * as ringtone from './ringtone.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -43,6 +44,7 @@ export class GroupCallManager {
   // Start or join a group call for a chat.
   async start(chatId, media) {
     if (this.active) return;
+    ringtone.stop();
     this.chatId = chatId;
     this.media = media === 'video' ? 'video' : 'audio';
     try { await this._ensureMedia(); }
@@ -124,6 +126,7 @@ export class GroupCallManager {
   }
 
   _reset() {
+    ringtone.stop();
     for (const userId of [...this.peers.keys()]) this._dropPeer(userId);
     if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
     this.active = false;
@@ -199,14 +202,15 @@ export class GroupCallManager {
     join.className = 'btn-primary'; join.textContent = 'Entrar';
     const dismiss = document.createElement('button');
     dismiss.className = 'gcall-dismiss'; dismiss.textContent = 'Ignorar';
-    join.onclick = () => { banner.remove(); this.incoming = null; this.start(d.chatId, d.media); };
-    dismiss.onclick = () => { banner.remove(); this.incoming = null; };
+    join.onclick = () => { ringtone.stop(); banner.remove(); this.incoming = null; this.start(d.chatId, d.media); };
+    dismiss.onclick = () => { ringtone.stop(); banner.remove(); this.incoming = null; };
     banner.append(join, dismiss);
     document.body.append(banner);
+    ringtone.startIncoming();
     // Auto-dismiss if the call ends.
-    const onEnded = (ev) => { if (ev.chatId === d.chatId) { banner.remove(); this.socket.off('gcall:ended', onEnded); } };
+    const onEnded = (ev) => { if (ev.chatId === d.chatId) { ringtone.stop(); banner.remove(); this.socket.off('gcall:ended', onEnded); } };
     this.socket.on('gcall:ended', onEnded);
-    setTimeout(() => { if (banner.isConnected) { banner.remove(); this.incoming = null; } }, 30000);
+    setTimeout(() => { if (banner.isConnected) { ringtone.stop(); banner.remove(); this.incoming = null; } }, 30000);
   }
 
   _toast(msg) {

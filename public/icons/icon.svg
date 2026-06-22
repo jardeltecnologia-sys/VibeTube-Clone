@@ -1,12 +1,24 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#00d09c"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#00d6a0"/>
+      <stop offset="1" stop-color="#007f63"/>
+    </linearGradient>
+    <linearGradient id="bars" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#00c896"/>
       <stop offset="1" stop-color="#008f6f"/>
     </linearGradient>
   </defs>
-  <rect width="512" height="512" rx="112" fill="url(#g)"/>
-  <path fill="#04130e" d="M256 104c-83 0-150 60-150 134 0 41 21 78 54 103l-14 53c-2 8 6 14 13 10l64-34c10 2 21 3 33 3 83 0 150-60 150-135S339 104 256 104z" opacity=".18"/>
-  <path fill="#ffffff" d="M256 96c-86 0-156 63-156 140 0 43 22 81 56 107l-15 56c-2 9 7 16 15 11l67-36c11 2 22 3 33 3 86 0 156-63 156-141S342 96 256 96zm0 36c66 0 120 47 120 105s-54 105-120 105c-12 0-23-2-34-5l-8-2-41 22 9-34-7-6c-30-23-39-49-39-80 0-58 54-105 120-105z"/>
-  <path fill="#ffffff" d="M300 196l-92 54a8 8 0 0 0 0 14l92 54c6 4 14-1 14-8V204c0-7-8-12-14-8z" opacity=".95"/>
+  <rect width="512" height="512" rx="116" fill="url(#bg)"/>
+  <!-- speech bubble -->
+  <path fill="#ffffff" d="M156 120h212a44 44 0 0 1 44 44v132a44 44 0 0 1-44 44H216l-58 46a10 10 0 0 1-16-8v-38a44 44 0 0 1-30-42V164a44 44 0 0 1 44-44z" opacity=".14"/>
+  <path fill="#ffffff" d="M150 112h212a44 44 0 0 1 44 44v132a44 44 0 0 1-44 44H210l-58 46a10 10 0 0 1-16-8v-38a44 44 0 0 1-30-42V156a44 44 0 0 1 44-44z"/>
+  <!-- voice equalizer -->
+  <g fill="url(#bars)">
+    <rect x="164" y="196" width="22" height="72" rx="11"/>
+    <rect x="202" y="170" width="22" height="124" rx="11"/>
+    <rect x="240" y="184" width="22" height="96" rx="11"/>
+    <rect x="278" y="162" width="22" height="140" rx="11"/>
+    <rect x="316" y="200" width="22" height="64" rx="11"/>
+  </g>
 </svg>

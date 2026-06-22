@@ -145,6 +145,20 @@ CREATE TABLE IF NOT EXISTS starred (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS contacts (
+  id           TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL,
+  user_id      TEXT,                 -- linked SpeedVox user, if this contact is one
+  display_name TEXT NOT NULL,
+  phone        TEXT,
+  email        TEXT,
+  note         TEXT,
+  created_at   INTEGER NOT NULL,
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_id, display_name);
 `);
 
 // Migrations for databases created before these columns existed.

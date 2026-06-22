@@ -3,6 +3,7 @@
 // directly peer-to-peer. The module owns its own full-screen call UI.
 
 import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+import * as ringtone from './ringtone.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -79,11 +80,13 @@ export class CallManager {
     }
     this._showOverlay('outgoing');
     this._setStatus('Chamando…');
+    ringtone.startOutgoing();
     this.socket.emit('call:invite', { to: peer.id, callId: this.callId, media });
   }
 
   async _onAccepted({ callId }) {
     if (callId !== this.callId || this.role !== 'caller') return;
+    ringtone.stop(); // callee picked up — stop the ringback
     const pc = this._createPeer();
     const offer = await pc.createOffer();
     offer.sdp = tuneAudioSdp(offer.sdp);
@@ -117,9 +120,11 @@ export class CallManager {
     this.role = 'callee';
     this._showOverlay('incoming');
     this._setStatus(media === 'video' ? 'Chamada de vídeo recebida' : 'Chamada recebida');
+    ringtone.startIncoming();
   }
 
   async _accept() {
+    ringtone.stop();
     try {
       await this._ensureMedia();
     } catch {
@@ -175,6 +180,7 @@ export class CallManager {
   }
 
   _reset() {
+    ringtone.stop();
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     if (this.pc) { try { this.pc.close(); } catch {} this.pc = null; }
     if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
