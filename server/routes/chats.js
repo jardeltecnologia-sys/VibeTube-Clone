@@ -11,8 +11,8 @@ function memberCount(chatId) {
   return db.prepare('SELECT COUNT(*) AS n FROM chat_members WHERE chat_id = ?').get(chatId).n;
 }
 const {
-  isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, serializeMessage, getMemberIds,
-  canAddToGroup,
+  isMember, getChatSummary, listChatsForUser, findOrCreateDirectChat, findOrCreateSavedChat,
+  serializeMessage, getMemberIds, canAddToGroup,
 } = require('../chat-service');
 const bus = require('../bus');
 
@@ -86,6 +86,12 @@ router.post('/group', (req, res) => {
   res.json({ chat: getChatSummary(chatId, req.user.id) });
 });
 
+// Open (or create) my personal "Saved Messages" chat.
+router.post('/saved', (req, res) => {
+  const chatId = findOrCreateSavedChat(req.user.id);
+  res.json({ chat: getChatSummary(chatId, req.user.id) });
+});
+
 // Get a single chat summary.
 router.get('/:id', (req, res) => {
   if (!isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });
@@ -101,11 +107,12 @@ router.get('/:id/messages', (req, res) => {
     .prepare(
       `SELECT m.* FROM messages m WHERE m.chat_id = ? AND m.created_at < ?
          AND (m.expires_at IS NULL OR m.expires_at > ?)
+         AND (m.send_at IS NULL OR m.send_at <= ?)
          AND NOT EXISTS (SELECT 1 FROM blocks b
            WHERE b.blocker_id = ? AND b.blocked_id = m.sender_id AND m.created_at >= b.created_at)
        ORDER BY m.created_at DESC LIMIT ?`
     )
-    .all(req.params.id, before, now(), req.user.id, limit);
+    .all(req.params.id, before, now(), now(), req.user.id, limit);
   // Annotate which messages this user has starred.
   const starredIds = new Set(
     db.prepare('SELECT message_id FROM starred WHERE user_id = ?').all(req.user.id).map((r) => r.message_id)

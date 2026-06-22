@@ -159,6 +159,15 @@ CREATE TABLE IF NOT EXISTS contacts (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
 );
 CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_id, display_name);
+
+CREATE TABLE IF NOT EXISTS poll_votes (
+  message_id   TEXT NOT NULL,
+  user_id      TEXT NOT NULL,
+  option_index INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id, option_index),
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
 `);
 
 // Migrations for databases created before these columns existed.
@@ -183,5 +192,8 @@ ensureColumn('chats', 'disappearing_timer', 'disappearing_timer INTEGER NOT NULL
 ensureColumn('chats', 'pinned_message_id', 'pinned_message_id TEXT');
 ensureColumn('messages', 'expires_at', 'expires_at INTEGER');
 ensureColumn('messages', 'mentions', 'mentions TEXT');
+// Scheduled messages: when set and in the future, the message is held back
+// (invisible) until the sweeper delivers it.
+ensureColumn('messages', 'send_at', 'send_at INTEGER');
 
 module.exports = db;

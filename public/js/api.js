@@ -56,6 +56,7 @@ export const api = {
   linkApprove: (code) => request('POST', '/link/approve', { code }),
 
   listChats: () => request('GET', '/chats'),
+  openSaved: () => request('POST', '/chats/saved'),
   openDirect: (userId) => request('POST', '/chats/direct', { userId }),
   createGroup: (name, memberIds) => request('POST', '/chats/group', { name, memberIds }),
   getChat: (id) => request('GET', `/chats/${id}`),

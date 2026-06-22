@@ -109,6 +109,7 @@ function lastMessagePreview(m) {
   if (m.type === 'image') return '📷 Foto';
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
+  if (m.type === 'poll') return `📊 ${(m.poll && m.poll.question) || 'Enquete'}`;
   if (m.type === 'call') return callLabel(m);
   if (m.type === 'system') return m.body || '';
   if (m.encrypted) {
@@ -300,6 +301,14 @@ function connectSocket() {
 
   socket.on('receipt', ({ chatId }) => {
     if (chatId === state.activeChatId) reloadActiveMessages(true);
+  });
+
+  socket.on('poll:update', ({ messageId, votes }) => {
+    for (const list of state.messages.values()) {
+      const m = list.find((x) => x.id === messageId);
+      if (m && m.poll) { m.poll.votes = votes; break; }
+    }
+    if (state.activeChatId) renderMessages(true);
   });
 
   socket.on('message:reaction', ({ messageId, reactions }) => {
@@ -590,6 +599,19 @@ function chatItemNode(chat) {
     menuBtn);
 }
 
+const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas']];
+function renderFolderTabs() {
+  const bar = $('#folder-tabs');
+  if (!bar) return;
+  const current = state.chatFolder || 'all';
+  bar.innerHTML = '';
+  for (const [key, label] of FOLDERS) {
+    const tab = el('button', { class: 'folder-tab' + (key === current ? ' active' : ''),
+      onclick: () => { state.chatFolder = key; renderChatList(); } }, label);
+    bar.append(tab);
+  }
+}
+
 function renderChatList() {
   const filter = $('#chat-search').value.trim().toLowerCase();
   const list = $('#chat-list');
@@ -602,7 +624,13 @@ function renderChatList() {
   });
   const visible = all.filter((c) => (!filter || c.title.toLowerCase().includes(filter)));
   const archived = visible.filter((c) => c.archived);
-  const active = visible.filter((c) => !c.archived);
+  let active = visible.filter((c) => !c.archived);
+  // Chat folders (Telegram-style filters).
+  const folder = state.chatFolder || 'all';
+  if (folder === 'unread') active = active.filter((c) => c.unread > 0);
+  else if (folder === 'groups') active = active.filter((c) => c.type === 'group');
+  else if (folder === 'direct') active = active.filter((c) => c.type !== 'group');
+  renderFolderTabs();
 
   if (archived.length) {
     list.append(el('li', { class: 'archived-toggle', onclick: () => { showArchived = !showArchived; renderChatList(); } },
@@ -835,9 +863,11 @@ function renderMessages(keepScroll) {
         parts.push(el('a', { class: 'msg-file', href: m.mediaUrl, target: '_blank' },
           el('span', { class: 'file-ic' }, '📄'),
           el('span', {}, m.mediaName || 'Arquivo')));
+      } else if (m.type === 'poll' && m.poll) {
+        parts.push(pollNode(m));
       }
-      const text = displayText(m);
-      if (m.encrypted && text == null) {
+      const text = m.type === 'poll' ? null : displayText(m);
+      if (m.encrypted && text == null && m.type !== 'poll') {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
@@ -1262,25 +1292,11 @@ async function sendMessage() {
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
 
-  // Encrypt end-to-end for direct chats. Prefer the forward-secret Double
-  // Ratchet; fall back to the static key (e.g. responder's first message) or
-  // plaintext when the peer has no published key.
-  let plainText;
-  if (chat && chat.type === 'direct') {
-    const ratEnv = await ratchetEncryptFor(chat, body);
-    if (ratEnv) {
-      payload.body = ratEnv;
-      payload.encrypted = true;
-      plainText = body;
-    } else {
-      const key = await ensureChatKey(chat);
-      if (key) {
-        payload.body = JSON.stringify(await e2ee.encrypt(key, body));
-        payload.encrypted = true;
-        plainText = body;
-      }
-    }
-  }
+  // Encrypt end-to-end for direct chats (shared with scheduled sends).
+  const enc = await encryptOutgoing(chat, body);
+  payload.body = enc.body;
+  if (enc.encrypted) payload.encrypted = true;
+  const plainText = enc.plainText;
 
   // Input may have changed during async encryption; only clear if unchanged.
   queueAndSend(payload, plainText);
@@ -1290,6 +1306,108 @@ async function sendMessage() {
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
+}
+
+// Encrypt an outgoing body for a chat. Prefers the forward-secret Double
+// Ratchet, falls back to the static key, else plaintext. Returns the body to
+// send plus whether it's encrypted and the plaintext (for the local echo).
+async function encryptOutgoing(chat, body) {
+  if (chat && chat.type === 'direct') {
+    const ratEnv = await ratchetEncryptFor(chat, body);
+    if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
+    const key = await ensureChatKey(chat);
+    if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
+  }
+  return { body, encrypted: false, plainText: undefined };
+}
+
+// Schedule the currently typed message for a future time (Telegram-style).
+async function scheduleCurrentMessage() {
+  const input = $('#message-input');
+  const body = input.value.trim();
+  if (!body || !state.activeChatId) return toast('Escreva a mensagem primeiro');
+  const when = el('input', { type: 'datetime-local' });
+  // Default suggestion: 1 hour from now (local time).
+  const d = new Date(Date.now() + 3600 * 1000 - new Date().getTimezoneOffset() * 60000);
+  when.value = d.toISOString().slice(0, 16);
+  const confirm = el('button', { class: 'btn-primary', onclick: async () => {
+    const ts = new Date(when.value).getTime();
+    if (!ts || ts < Date.now() + 5000) return toast('Escolha um horário no futuro');
+    const chat = state.chats.get(state.activeChatId);
+    const enc = await encryptOutgoing(chat, body);
+    const payload = { chatId: state.activeChatId, type: 'text', body: enc.body, sendAt: ts };
+    if (enc.encrypted) payload.encrypted = true;
+    state.socket.emit('message:send', payload, (res) => {
+      if (res && res.error) toast(res.error);
+      else toast('Mensagem agendada para ' + new Date(ts).toLocaleString('pt-BR'));
+    });
+    input.value = ''; input.style.height = 'auto';
+    backdrop.remove();
+  } }, 'Agendar');
+  const bodyEl = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Enviar em'), when,
+    el('p', { class: 'auth-hint', style: 'margin-top:6px' }, 'A mensagem fica guardada e é enviada automaticamente no horário escolhido.'),
+    el('div', { style: 'margin-top:14px' }, confirm));
+  const backdrop = modalShell('Agendar mensagem', bodyEl);
+}
+
+// Create a poll (Telegram-style) in the active chat.
+function pollComposeModal() {
+  if (!state.activeChatId) return;
+  const question = el('input', { type: 'text', placeholder: 'Pergunta' });
+  const optWrap = el('div', {});
+  const opts = [];
+  function addOpt(val = '') {
+    if (opts.length >= 10) return;
+    const inp = el('input', { type: 'text', placeholder: `Opção ${opts.length + 1}` });
+    inp.value = val;
+    opts.push(inp);
+    optWrap.append(inp);
+  }
+  addOpt(); addOpt();
+  const addBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-bottom:12px',
+    onclick: () => addOpt() }, '＋ Adicionar opção');
+  const multi = el('input', { type: 'checkbox' });
+  const multiRow = el('label', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px' },
+    multi, el('span', {}, 'Permitir múltiplas escolhas'));
+  const create = el('button', { class: 'btn-primary', onclick: () => {
+    const q = question.value.trim();
+    const options = opts.map((o) => o.value.trim()).filter(Boolean);
+    if (!q) return toast('Escreva a pergunta');
+    if (options.length < 2) return toast('Informe ao menos 2 opções');
+    state.socket.emit('message:send', {
+      chatId: state.activeChatId, type: 'poll',
+      body: JSON.stringify({ question: q, options, multi: multi.checked }),
+    }, (res) => { if (res && res.error) toast(res.error); });
+    backdrop.remove();
+  } }, 'Criar enquete');
+  const bodyEl = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Pergunta'), question,
+    el('div', { class: 'field-label' }, 'Opções'), optWrap, addBtn, multiRow, create);
+  const backdrop = modalShell('Nova enquete', bodyEl);
+  setTimeout(() => question.focus(), 50);
+}
+
+// Render a poll bubble with live results; tapping an option votes.
+function pollNode(m) {
+  const poll = m.poll;
+  const total = poll.votes.length;
+  const myVotes = new Set(poll.votes.filter((v) => v.userId === state.me.id).map((v) => v.option));
+  const wrap = el('div', { class: 'poll' });
+  wrap.append(el('div', { class: 'poll-q' }, poll.question));
+  poll.options.forEach((opt, i) => {
+    const count = poll.votes.filter((v) => v.option === i).length;
+    const pct = total ? Math.round((count / total) * 100) : 0;
+    const row = el('div', { class: 'poll-opt' + (myVotes.has(i) ? ' voted' : '') },
+      el('div', { class: 'poll-fill', style: `width:${pct}%` }),
+      el('div', { class: 'poll-opt-label' }, (myVotes.has(i) ? '✓ ' : '') + opt),
+      el('div', { class: 'poll-opt-count' }, String(count)));
+    row.onclick = () => { if (state.socket) state.socket.emit('poll:vote', { messageId: m.id, option: i }); };
+    wrap.append(row);
+  });
+  wrap.append(el('div', { class: 'poll-total' },
+    (total === 0 ? 'Sem votos ainda' : `${total} voto(s)`) + (poll.multi ? ' · múltipla escolha' : '')));
+  return wrap;
 }
 
 async function sendFile(file) {
@@ -1342,7 +1460,22 @@ function setupComposer() {
     input.setSelectionRange(pos, pos);
     input.dispatchEvent(new Event('input'));
   });
-  $('#attach-btn').onclick = () => $('#file-input').click();
+  $('#attach-btn').onclick = (e) => {
+    document.querySelector('.popup-menu')?.remove();
+    const menu = el('div', { class: 'popup-menu' });
+    const item = (label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
+      ev.stopPropagation(); menu.remove(); fn();
+    } }, label);
+    menu.append(item('📎 Foto ou arquivo', () => $('#file-input').click()));
+    menu.append(item('📊 Enquete', () => pollComposeModal()));
+    menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
+    document.body.append(menu);
+    const r = e.currentTarget.getBoundingClientRect();
+    menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
+    menu.style.top = `${r.top - menu.offsetHeight - 6}px`;
+    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  };
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
@@ -1663,6 +1796,39 @@ function makeAvatarUploadable(node, name, onUploaded) {
   return node;
 }
 
+// Open my personal "Saved Messages" chat (Telegram-style).
+async function openSavedMessages() {
+  try {
+    const { chat } = await api.openSaved();
+    state.chats.set(chat.id, chat);
+    state.socket.emit('chat:join', { chatId: chat.id });
+    await openChat(chat.id);
+  } catch { toast('Não foi possível abrir as Mensagens salvas'); }
+}
+
+// Copy a public invite link (Telegram t.me-style) that opens a chat with me.
+function shareMyLink() {
+  const link = `${location.origin}/?u=${encodeURIComponent(state.me.username)}`;
+  const done = () => toast('Link copiado: ' + link);
+  if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Seu link:', link));
+  else prompt('Seu link:', link);
+}
+
+// Resolve a ?u=username deep link into an open conversation.
+async function openUserByUsername(username) {
+  const uname = String(username || '').toLowerCase().trim();
+  if (!uname || uname === state.me.username) return;
+  try {
+    const { users } = await api.searchUsers(uname);
+    const u = users.find((x) => x.username && x.username.toLowerCase() === uname) || users[0];
+    if (!u) return toast('Usuário não encontrado: @' + uname);
+    const { chat } = await api.openDirect(u.id);
+    state.chats.set(chat.id, chat);
+    state.socket.emit('chat:join', { chatId: chat.id });
+    await openChat(chat.id);
+  } catch { toast('Não foi possível abrir a conversa'); }
+}
+
 function profileModal() {
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
@@ -1688,7 +1854,11 @@ function profileModal() {
       el('div', { class: 'field-label' }, 'Usuário'),
       el('div', {}, '@' + state.me.username)),
     el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openSavedMessages(); } }, '🔖 Mensagens salvas')),
+    el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); showStarredMessages(); } }, '★ Mensagens favoritas')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: shareMyLink }, '🔗 Compartilhar meu link')),
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); privacyModal(); } }, '🔒 Privacidade')),
     el('div', { class: 'field-row' },
@@ -2324,6 +2494,12 @@ async function boot() {
       if (state.chats.has(chatParam)) { clearInterval(tryOpen); openChat(chatParam); }
     }, 300);
     setTimeout(() => clearInterval(tryOpen), 6000);
+  }
+  // Public invite deep link: ?u=username opens a chat with that person.
+  const userParam = new URLSearchParams(location.search).get('u');
+  if (userParam && getToken()) {
+    history.replaceState(null, '', location.pathname);
+    setTimeout(() => openUserByUsername(userParam), 800);
   }
 
   if ('serviceWorker' in navigator) {
