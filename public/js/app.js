@@ -5,6 +5,7 @@ import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
 import * as ratchet from './ratchet.js';
 import { qrSVG } from './qrcode.js';
+import { AUDIO_CONSTRAINTS } from './webrtc-quality.js';
 
 // ------------------------------------------------------------------ state
 const state = {
@@ -1372,13 +1373,25 @@ async function toggleVoiceRecording() {
   if (!state.activeChatId) return;
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
   } catch {
     toast('Não foi possível acessar o microfone');
     return;
   }
   recordedChunks = [];
-  mediaRecorder = new MediaRecorder(stream);
+  // Mono Opus at a low bitrate: great speech quality, ~2-4x smaller files than
+  // the browser default, so voice notes still send on slow/mobile networks.
+  // (This is where a native Lyra encoder would slot in on Android — see LYRA.md.)
+  const recOpts = { audioBitsPerSecond: 24000 };
+  if (typeof MediaRecorder.isTypeSupported === 'function'
+      && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+    recOpts.mimeType = 'audio/webm;codecs=opus';
+  }
+  try {
+    mediaRecorder = new MediaRecorder(stream, recOpts);
+  } catch {
+    mediaRecorder = new MediaRecorder(stream); // fall back to browser defaults
+  }
   mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
