@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS link_requests (
   expires_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  email      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS starred (
   user_id    TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -144,6 +153,8 @@ function ensureColumn(table, column, ddl) {
   if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
 ensureColumn('users', 'public_key', 'public_key TEXT');
+// Existing accounts default to verified (1) so the new flow never locks them out.
+ensureColumn('users', 'email_verified', 'email_verified INTEGER NOT NULL DEFAULT 1');
 ensureColumn('users', 'privacy_last_seen', "privacy_last_seen TEXT NOT NULL DEFAULT 'everyone'");
 ensureColumn('users', 'read_receipts', 'read_receipts INTEGER NOT NULL DEFAULT 1');
 ensureColumn('users', 'privacy_groups', "privacy_groups TEXT NOT NULL DEFAULT 'everyone'");

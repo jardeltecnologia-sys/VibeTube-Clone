@@ -27,6 +27,7 @@ async function request(method, path, body, isForm = false) {
   if (!res.ok) {
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.status = res.status;
+    err.data = data; // expose fields like needsVerification/email to callers
     throw err;
   }
   return data;
@@ -35,6 +36,7 @@ async function request(method, path, body, isForm = false) {
 export const api = {
   register: (d) => request('POST', '/auth/register', d),
   login: (d) => request('POST', '/auth/login', d),
+  resendVerification: (email) => request('POST', '/auth/resend-verification', { email }),
   me: () => request('GET', '/auth/me'),
 
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),

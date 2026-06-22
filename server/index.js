@@ -10,6 +10,7 @@ require('./db'); // initialise schema
 const realtime = require('./realtime');
 
 const app = express();
+app.set('trust proxy', true); // behind Caddy/Cloudflare: use X-Forwarded-For for req.ip
 app.use(express.json({ limit: '2mb' }));
 
 // Simple request logging.

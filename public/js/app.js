@@ -136,7 +136,14 @@ function setupAuthScreen() {
       const { token, user } = await api.login({ email: fd.get('email'), password: fd.get('password') });
       setToken(token);
       await startApp(user);
-    } catch (err) { $('#auth-error').textContent = err.message; }
+    } catch (err) {
+      if (err.status === 403 && err.data && err.data.needsVerification) {
+        showVerificationNotice(err.data.email || fd.get('email'),
+          'Confirme o seu e-mail antes de entrar. Verifique a sua caixa de entrada.');
+      } else {
+        $('#auth-error').textContent = err.message;
+      }
+    }
   };
 
   $('#link-device-btn').onclick = linkNewDeviceFlow;
@@ -145,16 +152,57 @@ function setupAuthScreen() {
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-      const { token, user } = await api.register({
+      const res = await api.register({
         displayName: fd.get('displayName'),
         username: fd.get('username') || undefined,
         email: fd.get('email'),
         password: fd.get('password'),
       });
-      setToken(token);
-      await startApp(user);
+      if (res.pending) {
+        showVerificationNotice(res.email || fd.get('email'),
+          res.message || 'Enviamos um e-mail de confirmação. Clique no link para ativar a sua conta.');
+        return;
+      }
+      setToken(res.token);
+      await startApp(res.user);
     } catch (err) { $('#auth-error').textContent = err.message; }
   };
+}
+
+// Shown after a pending registration or a login blocked by an unverified e-mail.
+// Lets the user re-request the confirmation link (rate-limited on the server).
+function showVerificationNotice(email, message) {
+  $('#auth-error').textContent = '';
+  const status = el('p', { class: 'auth-hint', style: 'margin-bottom:12px' }, message);
+  const resendBtn = el('button', { class: 'btn-primary', type: 'button' }, 'Reenviar e-mail');
+  resendBtn.onclick = async () => {
+    resendBtn.disabled = true;
+    try {
+      await api.resendVerification(email);
+      status.textContent = `Reenviamos o e-mail de confirmação para ${email}.`;
+    } catch (err) {
+      status.textContent = err.message;
+    }
+    setTimeout(() => { resendBtn.disabled = false; }, 4000);
+  };
+  const body = el('div', { class: 'modal-body', style: 'text-align:center' },
+    el('h2', { style: 'color:var(--accent);margin:0 0 8px' }, '✉️ Confirme o seu e-mail'),
+    status,
+    el('p', { class: 'auth-hint', style: 'margin-bottom:16px;font-weight:600' }, email),
+    resendBtn);
+  const backdrop = modalShell('Verificação de e-mail', body);
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) backdrop.remove(); });
+}
+
+// If the user just confirmed via the e-mail link, the page may be opened with
+// ?verified=1 — greet them on the login screen.
+function checkVerifiedParam() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('verified') === '1') {
+    const note = $('#auth-error');
+    if (note) { note.style.color = 'var(--accent)'; note.textContent = 'E-mail confirmado! Já pode entrar.'; }
+    history.replaceState(null, '', location.pathname);
+  }
 }
 
 // New device: request a code, show it, and poll until an existing device approves.
@@ -2075,6 +2123,7 @@ async function startApp(user) {
 
 async function boot() {
   setupAuthScreen();
+  checkVerifiedParam();
 
   // Pick up a token handed back by the Google OAuth callback.
   if (location.hash.startsWith('#token=')) {

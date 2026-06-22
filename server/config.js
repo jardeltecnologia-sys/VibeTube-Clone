@@ -55,7 +55,27 @@ const config = {
   stunUrl: process.env.STUN_URL || 'stun:stun.l.google.com:19302',
   // How long an unanswered call rings before it counts as missed.
   callRingMs: parseInt(process.env.CALL_RING_MS || '45000', 10),
+  // SMTP for the e-mail confirmation flow. If no host is set, e-mail
+  // verification is disabled and sign-up activates immediately (legacy behavior).
+  smtp: {
+    host: process.env.SMTP_HOST || '',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    user: process.env.SMTP_USER || '',
+    pass: process.env.SMTP_PASS || '',
+    from: process.env.SMTP_FROM || 'SpeedVox <noreply@speedvox.app>',
+    secure: process.env.SMTP_SECURE === 'true' || process.env.SMTP_PORT === '465',
+  },
+  // Test mode: skip real sending and surface the token to the API (for tests).
+  emailTestMode: process.env.EMAIL_TEST_MODE === '1',
+  // Anti-abuse: max sign-ups per IP in a 15-minute window. Loopback is exempt
+  // (real clients always arrive through the proxy with a forwarded IP). Tuned
+  // generously so people behind shared NAT/CGNAT can still register.
+  registerMaxPerIp: parseInt(process.env.REGISTER_MAX_PER_IP || '20', 10),
 };
+
+// E-mail verification is on when SMTP is configured (or in test mode).
+config.emailVerification = Boolean(config.smtp.host) || config.emailTestMode;
+
 
 // Assemble the ICE server list sent to clients.
 config.iceServers = (() => {
