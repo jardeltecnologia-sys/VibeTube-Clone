@@ -2,6 +2,8 @@
 // The Socket.IO server only relays signaling (SDP/ICE); audio and video flow
 // directly peer-to-peer. The module owns its own full-screen call UI.
 
+import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class CallManager {
@@ -36,10 +38,7 @@ export class CallManager {
 
   async _ensureMedia() {
     if (this.localStream) return this.localStream;
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: this.media === 'video',
-    });
+    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
     this.localVideo.srcObject = this.localStream;
     return this.localStream;
   }
@@ -87,7 +86,9 @@ export class CallManager {
     if (callId !== this.callId || this.role !== 'caller') return;
     const pc = this._createPeer();
     const offer = await pc.createOffer();
+    offer.sdp = tuneAudioSdp(offer.sdp);
     await pc.setLocalDescription(offer);
+    if (this.media === 'video') capVideoBitrate(pc);
     this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
     this._setStatus('Conectando…');
   }
@@ -146,7 +147,9 @@ export class CallManager {
     }
     if (sdp.type === 'offer') {
       const answer = await this.pc.createAnswer();
+      answer.sdp = tuneAudioSdp(answer.sdp);
       await this.pc.setLocalDescription(answer);
+      if (this.media === 'video') capVideoBitrate(this.pc);
       this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: this.pc.localDescription });
       this._showOverlay('active');
     }

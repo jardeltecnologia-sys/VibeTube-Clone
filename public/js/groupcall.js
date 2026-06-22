@@ -4,6 +4,8 @@
 // grid UI. For large groups an SFU would scale better; full mesh is fine for
 // small groups and keeps media end-to-end between peers.
 
+import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class GroupCallManager {
@@ -35,9 +37,7 @@ export class GroupCallManager {
 
   async _ensureMedia() {
     if (this.localStream) return;
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true, video: this.media === 'video',
-    });
+    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
   }
 
   // Start or join a group call for a chat.
@@ -71,8 +71,11 @@ export class GroupCallManager {
     };
     if (initiator) {
       pc.createOffer()
-        .then((o) => pc.setLocalDescription(o))
-        .then(() => this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { sdp: pc.localDescription } }))
+        .then((o) => { o.sdp = tuneAudioSdp(o.sdp); return pc.setLocalDescription(o); })
+        .then(() => {
+          if (this.media === 'video') capVideoBitrate(pc);
+          this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { sdp: pc.localDescription } });
+        })
         .catch(() => {});
     }
     return entry;
@@ -89,7 +92,9 @@ export class GroupCallManager {
         for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {} }
         if (signal.sdp.type === 'offer') {
           const answer = await pc.createAnswer();
+          answer.sdp = tuneAudioSdp(answer.sdp);
           await pc.setLocalDescription(answer);
+          if (this.media === 'video') capVideoBitrate(pc);
           this.socket.emit('gcall:signal', { chatId: this.chatId, to: from, signal: { sdp: pc.localDescription } });
         }
       } else if (signal.ice) {
