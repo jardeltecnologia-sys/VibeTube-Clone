@@ -60,17 +60,32 @@ export class GroupCallManager {
 
   _connectTo(userId, initiator) {
     if (this.peers.has(userId)) return this.peers.get(userId);
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const entry = { pc, pendingIce: [], tile: null };
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, iceCandidatePoolSize: 4 });
+    const entry = { pc, pendingIce: [], tile: null, graceTimer: null };
     this.peers.set(userId, entry);
     for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
     pc.onicecandidate = (e) => {
       if (e.candidate) this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { ice: e.candidate } });
     };
     pc.ontrack = (e) => { entry.stream = e.streams[0]; this._addTile(userId, e.streams[0], false); };
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this._dropPeer(userId);
+    // 'disconnected' is usually transient — wait before dropping the peer.
+    const onState = () => {
+      const st = pc.connectionState || pc.iceConnectionState;
+      if (st === 'connected' || st === 'completed') {
+        if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+      } else if (st === 'failed' || st === 'closed') {
+        this._dropPeer(userId);
+      } else if (st === 'disconnected') {
+        if (!entry.graceTimer) {
+          entry.graceTimer = setTimeout(() => {
+            const s2 = pc.connectionState || pc.iceConnectionState;
+            if (s2 !== 'connected' && s2 !== 'completed') this._dropPeer(userId);
+          }, 12000);
+        }
+      }
     };
+    pc.onconnectionstatechange = onState;
+    pc.oniceconnectionstatechange = onState;
     if (initiator) {
       pc.createOffer()
         .then((o) => { o.sdp = tuneAudioSdp(o.sdp); return pc.setLocalDescription(o); })
@@ -115,6 +130,7 @@ export class GroupCallManager {
   _dropPeer(userId) {
     const entry = this.peers.get(userId);
     if (!entry) return;
+    if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     try { entry.pc.close(); } catch {}
     if (entry.tile) entry.tile.remove();
     this.peers.delete(userId);

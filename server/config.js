@@ -82,15 +82,30 @@ const config = {
 config.emailVerification = Boolean(config.smtp.host) || config.emailTestMode;
 
 
-// Assemble the ICE server list sent to clients.
+// Assemble the ICE server list sent to clients. STUN finds public addresses;
+// TURN relays media when peers can't reach each other directly (restrictive
+// NAT / mobile CGNAT) — without a TURN, those calls fail to connect.
 config.iceServers = (() => {
-  const list = [{ urls: config.stunUrl }];
+  const list = [
+    { urls: [config.stunUrl, 'stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] },
+  ];
   if (config.turnUrl) {
+    // Private TURN (recommended for production): set TURN_URL/USERNAME/CREDENTIAL.
     list.push({
       urls: config.turnUrl,
       username: config.turnUsername || undefined,
       credential: config.turnCredential || undefined,
     });
+  } else if (process.env.DISABLE_FREE_TURN !== '1') {
+    // No private TURN configured: fall back to the free Open Relay TURN so calls
+    // still connect across restrictive networks. It's best-effort/rate-limited —
+    // run your own coturn for reliability. Disable with DISABLE_FREE_TURN=1.
+    const cred = { username: 'openrelayproject', credential: 'openrelayproject' };
+    list.push(
+      { urls: 'turn:openrelay.metered.ca:80', ...cred },
+      { urls: 'turn:openrelay.metered.ca:443', ...cred },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', ...cred }
+    );
   }
   return list;
 })();

@@ -45,8 +45,9 @@ export class CallManager {
   }
 
   _createPeer() {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, iceCandidatePoolSize: 4 });
     this.pc = pc;
+    this.iceRestarts = 0;
     for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
     pc.onicecandidate = (e) => {
       if (e.candidate) {
@@ -57,11 +58,58 @@ export class CallManager {
       this.remoteVideo.srcObject = e.streams[0];
       this._setStatus(this.media === 'video' ? '' : 'Em chamada');
     };
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) this.hangup(true);
-      if (pc.connectionState === 'connected') this._startTimer();
-    };
+    pc.onconnectionstatechange = () => this._onConnState();
+    pc.oniceconnectionstatechange = () => this._onConnState();
     return pc;
+  }
+
+  // React to connection-state changes. Crucially, 'disconnected' is usually a
+  // transient blip (very common on mobile): we wait for auto-recovery and try
+  // an ICE restart instead of dropping the call immediately.
+  _onConnState() {
+    const pc = this.pc;
+    if (!pc) return;
+    const st = pc.connectionState || pc.iceConnectionState;
+    if (st === 'connected' || st === 'completed') {
+      this._clearGrace();
+      this.iceRestarts = 0;
+      this._startTimer();
+      this._setStatus(this.media === 'video' ? '' : 'Em chamada');
+    } else if (st === 'failed') {
+      this._setStatus('Reconectando…');
+      if (this.role === 'caller') this._tryIceRestart();
+      this._startGrace();
+    } else if (st === 'disconnected') {
+      this._setStatus('Reconectando…');
+      this._startGrace();
+    } else if (st === 'closed') {
+      this.hangup(true);
+    }
+  }
+
+  // Give the connection time to recover before giving up.
+  _startGrace() {
+    if (this.graceTimer) return;
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      const pc = this.pc;
+      const st = pc && (pc.connectionState || pc.iceConnectionState);
+      if (st !== 'connected' && st !== 'completed') this.hangup(true);
+    }, 12000);
+  }
+  _clearGrace() { if (this.graceTimer) { clearTimeout(this.graceTimer); this.graceTimer = null; } }
+
+  // Caller re-offers with iceRestart to recover a broken path (a few attempts).
+  async _tryIceRestart() {
+    const pc = this.pc;
+    if (!pc || this.role !== 'caller' || (this.iceRestarts || 0) >= 3) return;
+    this.iceRestarts = (this.iceRestarts || 0) + 1;
+    try {
+      const offer = await pc.createOffer({ iceRestart: true });
+      offer.sdp = tuneAudioSdp(offer.sdp);
+      await pc.setLocalDescription(offer);
+      this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
+    } catch { /* will be caught by the grace timeout */ }
   }
 
   // ---------------------------------------------------------------- outgoing
@@ -181,6 +229,7 @@ export class CallManager {
 
   _reset() {
     ringtone.stop();
+    this._clearGrace();
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
     if (this.pc) { try { this.pc.close(); } catch {} this.pc = null; }
     if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
