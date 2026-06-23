@@ -1,0 +1,31 @@
+# SpeedVox/VibeTube — Produção (nginx faz o TLS na frente).
+#
+# Diferente do docker-compose.yml da raiz (que é o EXEMPLO com Caddy para quem
+# faz self-host do zero), este arquivo reflete a produção real:
+#   - apenas o serviço `app`, escutando em 127.0.0.1:3017 (o nginx do host faz
+#     proxy_pass para essa porta);
+#   - SEM Caddy (o nginx já cuida de 80/443);
+#   - dados persistidos por bind mount em ./data (SQLite) e ./uploads (mídia),
+#     ficando visíveis e fáceis de backup.
+#
+# Uso (em /opt/speedvox):
+#   docker compose -f docker-compose.prod.yml up -d --build
+#
+# Primeira vez (migração dos dados do container antigo): veja
+# deploy/PROD-DEPLOY.md ANTES de subir, para não perder banco/uploads.
+
+services:
+  app:
+    build: .
+    container_name: speedvox-app-1
+    env_file:
+      - .env
+    environment:
+      - PORT=3000
+      - NODE_ENV=production
+    ports:
+      - "127.0.0.1:3017:3000"
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    restart: unless-stopped

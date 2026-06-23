@@ -1,5 +1,9 @@
 # Self-hosting on a VPS with automatic HTTPS (Let's Encrypt via Caddy).
 #
+# ⚠️  PRODUÇÃO (chat.vibetube.com.br): NÃO use este arquivo. Ela roda atrás do
+#     nginx (não Caddy), com o app em 127.0.0.1:3017. Use docker-compose.prod.yml
+#     e o guia deploy/PROD-DEPLOY.md. O conteúdo abaixo é só o exemplo Caddy.
+#
 #   1. Point a DNS A record (e.g. chat.seudominio.com) to the server's IP.
 #   2. Set env vars and run:
 #        DOMAIN=chat.seudominio.com JWT_SECRET="$(openssl rand -hex 32)" \
