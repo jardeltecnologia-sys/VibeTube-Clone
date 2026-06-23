@@ -122,10 +122,27 @@ function serializeMessage(row) {
     mentions: row.mentions ? JSON.parse(row.mentions) : [],
     createdAt: row.created_at,
     editedAt: row.edited_at,
+    sendAt: row.send_at || null,
     deleted: Boolean(row.deleted),
+    poll: row.type === 'poll' && !row.deleted ? serializePoll(row) : null,
     reactions,
     readBy: readers,
     deliveredTo: delivered,
+  };
+}
+
+// A poll's body holds { question, options:[...], multi }. Votes live in
+// poll_votes; we attach the running tally so the client can render results.
+function serializePoll(row) {
+  let meta;
+  try { meta = JSON.parse(row.body); } catch { return null; }
+  if (!meta || !Array.isArray(meta.options)) return null;
+  const votes = db.prepare('SELECT user_id, option_index FROM poll_votes WHERE message_id = ?').all(row.id);
+  return {
+    question: meta.question || '',
+    options: meta.options,
+    multi: Boolean(meta.multi),
+    votes: votes.map((v) => ({ userId: v.user_id, option: v.option_index })),
   };
 }
 
@@ -146,23 +163,28 @@ function getChatSummary(chatId, userId) {
     otherUser = members.find((m) => m.id !== userId) || members[0];
     title = otherUser ? otherUser.displayName : 'Conversa';
     avatarUrl = otherUser ? otherUser.avatarUrl : null;
+  } else if (chat.type === 'saved') {
+    title = 'Mensagens salvas';
   }
 
   // Hide messages a blocked contact sent after I blocked them (from preview too).
   const blockHide = `NOT EXISTS (SELECT 1 FROM blocks b
        WHERE b.blocker_id = ? AND b.blocked_id = m.sender_id AND m.created_at >= b.created_at)`;
 
+  // Pending scheduled messages (send_at in the future) are held back from views.
+  const notPending = '(m.send_at IS NULL OR m.send_at <= ?)';
+
   const lastRow = db
-    .prepare(`SELECT m.* FROM messages m WHERE m.chat_id = ? AND ${blockHide}
+    .prepare(`SELECT m.* FROM messages m WHERE m.chat_id = ? AND ${blockHide} AND ${notPending}
               ORDER BY m.created_at DESC LIMIT 1`)
-    .get(chatId, userId);
+    .get(chatId, userId, now());
 
   const unread = db
     .prepare(
       `SELECT COUNT(*) AS c FROM messages m
-       WHERE m.chat_id = ? AND m.sender_id != ? AND m.created_at > ? AND ${blockHide}`
+       WHERE m.chat_id = ? AND m.sender_id != ? AND m.created_at > ? AND ${blockHide} AND ${notPending}`
     )
-    .get(chatId, userId, membership.last_read_at, userId).c;
+    .get(chatId, userId, membership.last_read_at, userId, now()).c;
 
   const blocked = chat.type === 'direct' && otherUser ? iBlocked(userId, otherUser.id) : false;
 
@@ -242,6 +264,28 @@ function findOrCreateDirectChat(userA, userB) {
   return chatId;
 }
 
+// Find (or create) the user's personal "Saved Messages" chat — a chat with
+// only themselves, for notes/files. Telegram-style.
+function findOrCreateSavedChat(userId) {
+  const existing = db
+    .prepare(
+      `SELECT c.id FROM chats c JOIN chat_members m ON m.chat_id = c.id
+       WHERE c.type = 'saved' AND m.user_id = ? LIMIT 1`
+    )
+    .get(userId);
+  if (existing) return existing.id;
+  const chatId = id();
+  const ts = now();
+  const tx = db.transaction(() => {
+    db.prepare('INSERT INTO chats (id, type, created_by, created_at) VALUES (?, ?, ?, ?)')
+      .run(chatId, 'saved', userId, ts);
+    db.prepare('INSERT INTO chat_members (chat_id, user_id, role, joined_at) VALUES (?, ?, ?, ?)')
+      .run(chatId, userId, 'member', ts);
+  });
+  tx();
+  return chatId;
+}
+
 module.exports = {
   isMember,
   getMemberIds,
@@ -250,6 +294,7 @@ module.exports = {
   getChatSummary,
   listChatsForUser,
   findOrCreateDirectChat,
+  findOrCreateSavedChat,
   iBlocked,
   blockRow,
   isBlockedEither,

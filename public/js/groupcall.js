@@ -4,6 +4,9 @@
 // grid UI. For large groups an SFU would scale better; full mesh is fine for
 // small groups and keeps media end-to-end between peers.
 
+import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+import * as ringtone from './ringtone.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class GroupCallManager {
@@ -35,14 +38,13 @@ export class GroupCallManager {
 
   async _ensureMedia() {
     if (this.localStream) return;
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true, video: this.media === 'video',
-    });
+    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
   }
 
   // Start or join a group call for a chat.
   async start(chatId, media) {
     if (this.active) return;
+    ringtone.stop();
     this.chatId = chatId;
     this.media = media === 'video' ? 'video' : 'audio';
     try { await this._ensureMedia(); }
@@ -58,21 +60,54 @@ export class GroupCallManager {
 
   _connectTo(userId, initiator) {
     if (this.peers.has(userId)) return this.peers.get(userId);
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const entry = { pc, pendingIce: [], tile: null };
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, iceCandidatePoolSize: 4 });
+    const entry = { pc, pendingIce: [], tile: null, graceTimer: null };
     this.peers.set(userId, entry);
     for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
     pc.onicecandidate = (e) => {
       if (e.candidate) this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { ice: e.candidate } });
     };
     pc.ontrack = (e) => { entry.stream = e.streams[0]; this._addTile(userId, e.streams[0], false); };
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) this._dropPeer(userId);
+
+    const onConnected = () => {
+      if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
     };
+    const onFailed = () => {
+      // Only drop if still the active entry for this userId.
+      if (this.peers.get(userId) === entry) this._dropPeer(userId);
+    };
+    const onDisconnected = () => {
+      if (!entry.graceTimer) {
+        entry.graceTimer = setTimeout(() => {
+          entry.graceTimer = null;
+          const connSt = pc.connectionState;
+          const iceSt = pc.iceConnectionState;
+          const ok = connSt === 'connected' || iceSt === 'connected' || iceSt === 'completed';
+          if (!ok && this.peers.get(userId) === entry) this._dropPeer(userId);
+        }, 20000);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      const st = pc.connectionState;
+      if (st === 'connected') onConnected();
+      else if (st === 'failed' || st === 'closed') onFailed();
+      else if (st === 'disconnected') onDisconnected();
+    };
+    pc.oniceconnectionstatechange = () => {
+      const st = pc.iceConnectionState;
+      if (st === 'connected' || st === 'completed') onConnected();
+      else if (st === 'failed' || st === 'closed') onFailed();
+      else if (st === 'disconnected') onDisconnected();
+    };
+
     if (initiator) {
       pc.createOffer()
-        .then((o) => pc.setLocalDescription(o))
-        .then(() => this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { sdp: pc.localDescription } }))
+        .then((o) => { o.sdp = tuneAudioSdp(o.sdp); return pc.setLocalDescription(o); })
+        .then(() => {
+          if (this.media === 'video') capVideoBitrate(pc);
+          this.socket.emit('gcall:signal', { chatId: this.chatId, to: userId, signal: { sdp: pc.localDescription } });
+        })
         .catch(() => {});
     }
     return entry;
@@ -89,7 +124,9 @@ export class GroupCallManager {
         for (const c of entry.pendingIce.splice(0)) { try { await pc.addIceCandidate(new RTCIceCandidate(c)); } catch {} }
         if (signal.sdp.type === 'offer') {
           const answer = await pc.createAnswer();
+          answer.sdp = tuneAudioSdp(answer.sdp);
           await pc.setLocalDescription(answer);
+          if (this.media === 'video') capVideoBitrate(pc);
           this.socket.emit('gcall:signal', { chatId: this.chatId, to: from, signal: { sdp: pc.localDescription } });
         }
       } else if (signal.ice) {
@@ -108,9 +145,13 @@ export class GroupCallManager {
   _dropPeer(userId) {
     const entry = this.peers.get(userId);
     if (!entry) return;
-    try { entry.pc.close(); } catch {}
+    if (entry.graceTimer) { clearTimeout(entry.graceTimer); entry.graceTimer = null; }
+    this.peers.delete(userId); // Remove BEFORE close() to prevent re-entry via state events.
+    const pc = entry.pc;
+    entry.pc = null;
+    try { pc.close(); } catch {}
     if (entry.tile) entry.tile.remove();
-    this.peers.delete(userId);
+    this._reflow();
   }
 
   hangup(remote = false) {
@@ -119,6 +160,7 @@ export class GroupCallManager {
   }
 
   _reset() {
+    ringtone.stop();
     for (const userId of [...this.peers.keys()]) this._dropPeer(userId);
     if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
     this.active = false;
@@ -194,14 +236,15 @@ export class GroupCallManager {
     join.className = 'btn-primary'; join.textContent = 'Entrar';
     const dismiss = document.createElement('button');
     dismiss.className = 'gcall-dismiss'; dismiss.textContent = 'Ignorar';
-    join.onclick = () => { banner.remove(); this.incoming = null; this.start(d.chatId, d.media); };
-    dismiss.onclick = () => { banner.remove(); this.incoming = null; };
+    join.onclick = () => { ringtone.stop(); banner.remove(); this.incoming = null; this.start(d.chatId, d.media); };
+    dismiss.onclick = () => { ringtone.stop(); banner.remove(); this.incoming = null; };
     banner.append(join, dismiss);
     document.body.append(banner);
+    ringtone.startIncoming();
     // Auto-dismiss if the call ends.
-    const onEnded = (ev) => { if (ev.chatId === d.chatId) { banner.remove(); this.socket.off('gcall:ended', onEnded); } };
+    const onEnded = (ev) => { if (ev.chatId === d.chatId) { ringtone.stop(); banner.remove(); this.socket.off('gcall:ended', onEnded); } };
     this.socket.on('gcall:ended', onEnded);
-    setTimeout(() => { if (banner.isConnected) { banner.remove(); this.incoming = null; } }, 30000);
+    setTimeout(() => { if (banner.isConnected) { ringtone.stop(); banner.remove(); this.incoming = null; } }, 30000);
   }
 
   _toast(msg) {

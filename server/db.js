@@ -128,6 +128,15 @@ CREATE TABLE IF NOT EXISTS link_requests (
   expires_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS email_verification_tokens (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  email      TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS starred (
   user_id    TEXT NOT NULL,
   message_id TEXT NOT NULL,
@@ -136,6 +145,55 @@ CREATE TABLE IF NOT EXISTS starred (
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS contacts (
+  id           TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL,
+  user_id      TEXT,                 -- linked SpeedVox user, if this contact is one
+  display_name TEXT NOT NULL,
+  phone        TEXT,
+  email        TEXT,
+  note         TEXT,
+  created_at   INTEGER NOT NULL,
+  FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+CREATE INDEX IF NOT EXISTS idx_contacts_owner ON contacts(owner_id, display_name);
+
+CREATE TABLE IF NOT EXISTS poll_votes (
+  message_id   TEXT NOT NULL,
+  user_id      TEXT NOT NULL,
+  option_index INTEGER NOT NULL,
+  PRIMARY KEY (message_id, user_id, option_index),
+  FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- VibeTube Mesh / SpeedVox Offline Mode (additive). Offline devices register a
+-- public identity and, when back online, sync the offline messages they relayed.
+CREATE TABLE IF NOT EXISTS mesh_devices (
+  device_id    TEXT PRIMARY KEY,       -- derived from the signing public key
+  public_key   TEXT NOT NULL,          -- shareable public bundle (JSON: signPub, kxPub)
+  display_name TEXT,
+  user_id      TEXT,                   -- optional link to a SpeedVox account
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS mesh_messages (
+  message_id     TEXT PRIMARY KEY,     -- envelope messageId (dedup key)
+  type           TEXT NOT NULL,
+  from_device_id TEXT,
+  to_device_id   TEXT,
+  room_id        TEXT,
+  envelope       TEXT NOT NULL,        -- full signed envelope (JSON)
+  created_at     INTEGER NOT NULL,     -- envelope createdAt
+  received_at    INTEGER NOT NULL,     -- when the server accepted it
+  expires_at     INTEGER               -- retention cutoff
+);
+CREATE INDEX IF NOT EXISTS idx_mesh_messages_received ON mesh_messages(received_at);
+CREATE INDEX IF NOT EXISTS idx_mesh_messages_room ON mesh_messages(room_id, received_at);
 `);
 
 // Migrations for databases created before these columns existed.
@@ -144,6 +202,8 @@ function ensureColumn(table, column, ddl) {
   if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
 ensureColumn('users', 'public_key', 'public_key TEXT');
+// Existing accounts default to verified (1) so the new flow never locks them out.
+ensureColumn('users', 'email_verified', 'email_verified INTEGER NOT NULL DEFAULT 1');
 ensureColumn('users', 'privacy_last_seen', "privacy_last_seen TEXT NOT NULL DEFAULT 'everyone'");
 ensureColumn('users', 'read_receipts', 'read_receipts INTEGER NOT NULL DEFAULT 1');
 ensureColumn('users', 'privacy_groups', "privacy_groups TEXT NOT NULL DEFAULT 'everyone'");
@@ -158,5 +218,8 @@ ensureColumn('chats', 'disappearing_timer', 'disappearing_timer INTEGER NOT NULL
 ensureColumn('chats', 'pinned_message_id', 'pinned_message_id TEXT');
 ensureColumn('messages', 'expires_at', 'expires_at INTEGER');
 ensureColumn('messages', 'mentions', 'mentions TEXT');
+// Scheduled messages: when set and in the future, the message is held back
+// (invisible) until the sweeper delivers it.
+ensureColumn('messages', 'send_at', 'send_at INTEGER');
 
 module.exports = db;

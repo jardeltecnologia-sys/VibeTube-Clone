@@ -1,10 +1,15 @@
 import { api, getToken, setToken } from './api.js';
+import { API_BASE, apiUrl, mediaUrl, isNative } from './env.js';
 import { MeshManager } from './mesh.js';
+import { attachNearby } from './mesh-nearby.js';
+import * as ringtone from './ringtone.js';
+import * as offline from './offline.js';
 import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
 import * as ratchet from './ratchet.js';
 import { qrSVG } from './qrcode.js';
+import { AUDIO_CONSTRAINTS } from './webrtc-quality.js';
 
 // ------------------------------------------------------------------ state
 const state = {
@@ -56,7 +61,7 @@ function initials(name) {
 }
 
 function avatarBg(node, url, name) {
-  if (url) { node.style.backgroundImage = `url(${url})`; node.textContent = ''; }
+  if (url) { node.style.backgroundImage = `url(${mediaUrl(url)})`; node.textContent = ''; }
   else { node.style.backgroundImage = 'none'; node.textContent = initials(name); }
 }
 
@@ -108,6 +113,7 @@ function lastMessagePreview(m) {
   if (m.type === 'image') return '📷 Foto';
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
+  if (m.type === 'poll') return `📊 ${(m.poll && m.poll.question) || 'Enquete'}`;
   if (m.type === 'call') return callLabel(m);
   if (m.type === 'system') return m.body || '';
   if (m.encrypted) {
@@ -136,7 +142,14 @@ function setupAuthScreen() {
       const { token, user } = await api.login({ email: fd.get('email'), password: fd.get('password') });
       setToken(token);
       await startApp(user);
-    } catch (err) { $('#auth-error').textContent = err.message; }
+    } catch (err) {
+      if (err.status === 403 && err.data && err.data.needsVerification) {
+        showVerificationNotice(err.data.email || fd.get('email'),
+          'Confirme o seu e-mail antes de entrar. Verifique a sua caixa de entrada.');
+      } else {
+        $('#auth-error').textContent = err.message;
+      }
+    }
   };
 
   $('#link-device-btn').onclick = linkNewDeviceFlow;
@@ -145,16 +158,57 @@ function setupAuthScreen() {
     e.preventDefault();
     const fd = new FormData(e.target);
     try {
-      const { token, user } = await api.register({
+      const res = await api.register({
         displayName: fd.get('displayName'),
         username: fd.get('username') || undefined,
         email: fd.get('email'),
         password: fd.get('password'),
       });
-      setToken(token);
-      await startApp(user);
+      if (res.pending) {
+        showVerificationNotice(res.email || fd.get('email'),
+          res.message || 'Enviamos um e-mail de confirmação. Clique no link para ativar a sua conta.');
+        return;
+      }
+      setToken(res.token);
+      await startApp(res.user);
     } catch (err) { $('#auth-error').textContent = err.message; }
   };
+}
+
+// Shown after a pending registration or a login blocked by an unverified e-mail.
+// Lets the user re-request the confirmation link (rate-limited on the server).
+function showVerificationNotice(email, message) {
+  $('#auth-error').textContent = '';
+  const status = el('p', { class: 'auth-hint', style: 'margin-bottom:12px' }, message);
+  const resendBtn = el('button', { class: 'btn-primary', type: 'button' }, 'Reenviar e-mail');
+  resendBtn.onclick = async () => {
+    resendBtn.disabled = true;
+    try {
+      await api.resendVerification(email);
+      status.textContent = `Reenviamos o e-mail de confirmação para ${email}.`;
+    } catch (err) {
+      status.textContent = err.message;
+    }
+    setTimeout(() => { resendBtn.disabled = false; }, 4000);
+  };
+  const body = el('div', { class: 'modal-body', style: 'text-align:center' },
+    el('h2', { style: 'color:var(--accent);margin:0 0 8px' }, '✉️ Confirme o seu e-mail'),
+    status,
+    el('p', { class: 'auth-hint', style: 'margin-bottom:16px;font-weight:600' }, email),
+    resendBtn);
+  const backdrop = modalShell('Verificação de e-mail', body);
+  backdrop.addEventListener('click', (ev) => { if (ev.target === backdrop) backdrop.remove(); });
+}
+
+// If the user just confirmed via the e-mail link, the page may be opened with
+// ?verified=1 — greet them on the login screen.
+function checkVerifiedParam() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('verified') === '1') {
+    const note = $('#auth-error');
+    if (note) { note.style.color = 'var(--accent)'; note.textContent = 'E-mail confirmado! Já pode entrar.'; }
+    history.replaceState(null, '', location.pathname);
+  }
 }
 
 // New device: request a code, show it, and poll until an existing device approves.
@@ -191,10 +245,18 @@ async function linkNewDeviceFlow() {
 
 // ------------------------------------------------------------------ socket
 function connectSocket() {
-  const socket = io({ auth: { token: getToken() } });
+  // Same-origin for the web/PWA; absolute server URL for the bundled native app.
+  const socket = API_BASE
+    ? io(API_BASE, { auth: { token: getToken() }, transports: ['websocket', 'polling'] })
+    : io({ auth: { token: getToken() } });
   state.socket = socket;
 
-  socket.on('connect', () => { updateNetIndicator(); flushOutbox(); });
+  socket.on('connect', () => {
+    updateNetIndicator();
+    flushOutbox();
+    // Internet is back: keep the mesh device registry fresh (best-effort).
+    offline.registerDevice().catch(() => {});
+  });
   socket.on('disconnect', () => updateNetIndicator());
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
@@ -251,6 +313,14 @@ function connectSocket() {
 
   socket.on('receipt', ({ chatId }) => {
     if (chatId === state.activeChatId) reloadActiveMessages(true);
+  });
+
+  socket.on('poll:update', ({ messageId, votes }) => {
+    for (const list of state.messages.values()) {
+      const m = list.find((x) => x.id === messageId);
+      if (m && m.poll) { m.poll.votes = votes; break; }
+    }
+    if (state.activeChatId) renderMessages(true);
   });
 
   socket.on('message:reaction', ({ messageId, reactions }) => {
@@ -310,11 +380,77 @@ function setupMesh() {
     iceServers: state.iceServers,
   });
   state.mesh.addEventListener('status', updateNetIndicator);
-  // Messages arriving directly over a peer link (used when the server is down).
+  // A chat message relayed across the mesh (possibly several hops away). The
+  // payload IS the message object; it may be E2EE ciphertext we then decrypt.
   state.mesh.addEventListener('message', (ev) => {
-    const { data } = ev.detail;
-    if (data.kind === 'message' && data.message) addMessage(data.message);
+    const msg = ev.detail.data;
+    if (msg && msg.chatId) addMessage(msg);
   });
+  // An emergency SOS flooded across the mesh — surface it loudly.
+  state.mesh.addEventListener('sos', (ev) => onMeshSOS(ev.detail));
+  // Native zero-infrastructure transport (BLE / Wi-Fi Direct) when running in
+  // the Capacitor app; a no-op in plain browsers.
+  state.meshNearby = attachNearby(state.mesh, { displayName: state.me.displayName });
+}
+
+// Route a queued message into the mesh, addressed to its recipient(s). The mesh
+// hops it toward them and holds it if no path exists yet.
+function meshDeliver(payload) {
+  const chat = state.chats.get(payload.chatId);
+  if (!chat) return;
+  const msg = optimisticMessage(payload);
+  if (chat.type === 'direct' && chat.otherUser) {
+    state.mesh.sendMessage(chat.otherUser.id, msg);
+  } else if (chat.type === 'group' && Array.isArray(chat.members)) {
+    for (const m of chat.members) if (m.id !== state.me.id) state.mesh.sendMessage(m.id, msg);
+  }
+}
+
+// An SOS flooded across the mesh reached us — surface it as loudly as we can.
+function onMeshSOS({ from, data }) {
+  const name = (data && data.name) || 'Alguém';
+  const text = (data && data.text) || 'Emergência!';
+  const coords = data && data.coords;
+  const banner = el('div', { class: 'sos-banner' },
+    el('div', { class: 'sos-title' }, '🆘 SOS de ' + name),
+    el('div', { class: 'sos-text' }, text));
+  if (coords) {
+    banner.append(el('a', { class: 'sos-map', target: '_blank', rel: 'noopener',
+      href: `https://maps.google.com/?q=${coords.lat},${coords.lon}` }, '📍 Ver localização'));
+  }
+  banner.append(el('button', { class: 'sos-close', onclick: () => banner.remove() }, 'Fechar'));
+  document.body.append(banner);
+  try { if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); } catch {}
+  try { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 4000); } catch {}
+  try {
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification('🆘 SOS de ' + name, { body: text });
+    }
+  } catch {}
+}
+
+// Trigger an emergency SOS: turns on the mesh, grabs a best-effort location and
+// floods every reachable device (and holds it for devices that appear later).
+async function sendSOS() {
+  if (!confirm('Enviar um alerta de EMERGÊNCIA (SOS) para todos os aparelhos próximos na malha?')) return;
+  if (state.mesh && !state.mesh.enabled) {
+    state.mesh.setEnabled(true);
+    for (const [uid, p] of state.presence) if (p.online) state.mesh.connect(uid);
+  }
+  if (state.meshNearby && state.meshNearby.available) { try { await state.meshNearby.start(); } catch {} }
+  const data = { name: state.me.displayName, text: 'Preciso de ajuda! (SOS)' };
+  const coords = await new Promise((res) => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => res({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => res(null), { timeout: 4000, maximumAge: 60000 });
+  });
+  if (coords) data.coords = coords;
+  const count = state.mesh ? state.mesh.neighbors().length : 0;
+  state.mesh.sos(data);
+  toast(count
+    ? `SOS enviado para ${count} aparelho(s) próximos`
+    : 'SOS ativado — será entregue assim que houver aparelhos por perto');
 }
 
 function setupCalls() {
@@ -541,6 +677,19 @@ function chatItemNode(chat) {
     menuBtn);
 }
 
+const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas']];
+function renderFolderTabs() {
+  const bar = $('#folder-tabs');
+  if (!bar) return;
+  const current = state.chatFolder || 'all';
+  bar.innerHTML = '';
+  for (const [key, label] of FOLDERS) {
+    const tab = el('button', { class: 'folder-tab' + (key === current ? ' active' : ''),
+      onclick: () => { state.chatFolder = key; renderChatList(); } }, label);
+    bar.append(tab);
+  }
+}
+
 function renderChatList() {
   const filter = $('#chat-search').value.trim().toLowerCase();
   const list = $('#chat-list');
@@ -553,7 +702,13 @@ function renderChatList() {
   });
   const visible = all.filter((c) => (!filter || c.title.toLowerCase().includes(filter)));
   const archived = visible.filter((c) => c.archived);
-  const active = visible.filter((c) => !c.archived);
+  let active = visible.filter((c) => !c.archived);
+  // Chat folders (Telegram-style filters).
+  const folder = state.chatFolder || 'all';
+  if (folder === 'unread') active = active.filter((c) => c.unread > 0);
+  else if (folder === 'groups') active = active.filter((c) => c.type === 'group');
+  else if (folder === 'direct') active = active.filter((c) => c.type !== 'group');
+  renderFolderTabs();
 
   if (archived.length) {
     list.append(el('li', { class: 'archived-toggle', onclick: () => { showArchived = !showArchived; renderChatList(); } },
@@ -767,18 +922,31 @@ function renderMessages(keepScroll) {
       parts.push(el('div', { class: 'msg-body msg-deleted' }, '🚫 Esta mensagem foi apagada'));
     } else {
       if (m.type === 'image' && m.mediaUrl) {
-        parts.push(el('div', { class: 'msg-media' },
-          el('img', { src: m.mediaUrl, loading: 'lazy', onclick: () => window.open(m.mediaUrl, '_blank') })));
+        const mu = mediaUrl(m.mediaUrl);
+        const showImg = () => el('img', { src: mu, loading: 'lazy', onclick: () => window.open(mu, '_blank') });
+        if (autoDownloadOn()) {
+          parts.push(el('div', { class: 'msg-media' }, showImg()));
+        } else {
+          // Auto-download off: show a tap-to-load placeholder (saves mobile data).
+          const wrap = el('div', { class: 'msg-media' });
+          const btn = el('button', { class: 'media-download-btn',
+            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
+            '⬇ Baixar foto');
+          wrap.append(btn);
+          parts.push(wrap);
+        }
       } else if (m.type === 'audio' && m.mediaUrl) {
         parts.push(el('div', { class: 'msg-audio' },
-          el('audio', { controls: '', src: m.mediaUrl, preload: 'none' })));
+          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' })));
       } else if (m.type === 'file' && m.mediaUrl) {
-        parts.push(el('a', { class: 'msg-file', href: m.mediaUrl, target: '_blank' },
+        parts.push(el('a', { class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank' },
           el('span', { class: 'file-ic' }, '📄'),
           el('span', {}, m.mediaName || 'Arquivo')));
+      } else if (m.type === 'poll' && m.poll) {
+        parts.push(pollNode(m));
       }
-      const text = displayText(m);
-      if (m.encrypted && text == null) {
+      const text = m.type === 'poll' ? null : displayText(m);
+      if (m.encrypted && text == null && m.type !== 'poll') {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
@@ -1121,10 +1289,10 @@ function optimisticMessage(payload) {
 // Try to deliver one queued payload. Updates pending/failed state on the bubble.
 function deliver(payload) {
   if (!state.socket || !state.socket.connected) {
-    // No server link — flood over the mesh if it is up, otherwise stay queued.
-    if (state.mesh && state.mesh.enabled) {
-      state.mesh.broadcast({ kind: 'message', message: optimisticMessage(payload) });
-    }
+    // No server link — route over the mesh if it is up, otherwise stay queued.
+    // The mesh hops the message toward the recipient and holds it if there's no
+    // path yet (store-and-forward), so it lands when a route appears.
+    if (state.mesh && state.mesh.enabled) meshDeliver(payload);
     return;
   }
   state.socket.emit('message:send', payload, (res) => {
@@ -1203,25 +1371,11 @@ async function sendMessage() {
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
 
-  // Encrypt end-to-end for direct chats. Prefer the forward-secret Double
-  // Ratchet; fall back to the static key (e.g. responder's first message) or
-  // plaintext when the peer has no published key.
-  let plainText;
-  if (chat && chat.type === 'direct') {
-    const ratEnv = await ratchetEncryptFor(chat, body);
-    if (ratEnv) {
-      payload.body = ratEnv;
-      payload.encrypted = true;
-      plainText = body;
-    } else {
-      const key = await ensureChatKey(chat);
-      if (key) {
-        payload.body = JSON.stringify(await e2ee.encrypt(key, body));
-        payload.encrypted = true;
-        plainText = body;
-      }
-    }
-  }
+  // Encrypt end-to-end for direct chats (shared with scheduled sends).
+  const enc = await encryptOutgoing(chat, body);
+  payload.body = enc.body;
+  if (enc.encrypted) payload.encrypted = true;
+  const plainText = enc.plainText;
 
   // Input may have changed during async encryption; only clear if unchanged.
   queueAndSend(payload, plainText);
@@ -1231,6 +1385,108 @@ async function sendMessage() {
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
+}
+
+// Encrypt an outgoing body for a chat. Prefers the forward-secret Double
+// Ratchet, falls back to the static key, else plaintext. Returns the body to
+// send plus whether it's encrypted and the plaintext (for the local echo).
+async function encryptOutgoing(chat, body) {
+  if (chat && chat.type === 'direct') {
+    const ratEnv = await ratchetEncryptFor(chat, body);
+    if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
+    const key = await ensureChatKey(chat);
+    if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
+  }
+  return { body, encrypted: false, plainText: undefined };
+}
+
+// Schedule the currently typed message for a future time (Telegram-style).
+async function scheduleCurrentMessage() {
+  const input = $('#message-input');
+  const body = input.value.trim();
+  if (!body || !state.activeChatId) return toast('Escreva a mensagem primeiro');
+  const when = el('input', { type: 'datetime-local' });
+  // Default suggestion: 1 hour from now (local time).
+  const d = new Date(Date.now() + 3600 * 1000 - new Date().getTimezoneOffset() * 60000);
+  when.value = d.toISOString().slice(0, 16);
+  const confirm = el('button', { class: 'btn-primary', onclick: async () => {
+    const ts = new Date(when.value).getTime();
+    if (!ts || ts < Date.now() + 5000) return toast('Escolha um horário no futuro');
+    const chat = state.chats.get(state.activeChatId);
+    const enc = await encryptOutgoing(chat, body);
+    const payload = { chatId: state.activeChatId, type: 'text', body: enc.body, sendAt: ts };
+    if (enc.encrypted) payload.encrypted = true;
+    state.socket.emit('message:send', payload, (res) => {
+      if (res && res.error) toast(res.error);
+      else toast('Mensagem agendada para ' + new Date(ts).toLocaleString('pt-BR'));
+    });
+    input.value = ''; input.style.height = 'auto';
+    backdrop.remove();
+  } }, 'Agendar');
+  const bodyEl = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Enviar em'), when,
+    el('p', { class: 'auth-hint', style: 'margin-top:6px' }, 'A mensagem fica guardada e é enviada automaticamente no horário escolhido.'),
+    el('div', { style: 'margin-top:14px' }, confirm));
+  const backdrop = modalShell('Agendar mensagem', bodyEl);
+}
+
+// Create a poll (Telegram-style) in the active chat.
+function pollComposeModal() {
+  if (!state.activeChatId) return;
+  const question = el('input', { type: 'text', placeholder: 'Pergunta' });
+  const optWrap = el('div', {});
+  const opts = [];
+  function addOpt(val = '') {
+    if (opts.length >= 10) return;
+    const inp = el('input', { type: 'text', placeholder: `Opção ${opts.length + 1}` });
+    inp.value = val;
+    opts.push(inp);
+    optWrap.append(inp);
+  }
+  addOpt(); addOpt();
+  const addBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-bottom:12px',
+    onclick: () => addOpt() }, '＋ Adicionar opção');
+  const multi = el('input', { type: 'checkbox' });
+  const multiRow = el('label', { style: 'display:flex;align-items:center;gap:8px;margin-bottom:12px' },
+    multi, el('span', {}, 'Permitir múltiplas escolhas'));
+  const create = el('button', { class: 'btn-primary', onclick: () => {
+    const q = question.value.trim();
+    const options = opts.map((o) => o.value.trim()).filter(Boolean);
+    if (!q) return toast('Escreva a pergunta');
+    if (options.length < 2) return toast('Informe ao menos 2 opções');
+    state.socket.emit('message:send', {
+      chatId: state.activeChatId, type: 'poll',
+      body: JSON.stringify({ question: q, options, multi: multi.checked }),
+    }, (res) => { if (res && res.error) toast(res.error); });
+    backdrop.remove();
+  } }, 'Criar enquete');
+  const bodyEl = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Pergunta'), question,
+    el('div', { class: 'field-label' }, 'Opções'), optWrap, addBtn, multiRow, create);
+  const backdrop = modalShell('Nova enquete', bodyEl);
+  setTimeout(() => question.focus(), 50);
+}
+
+// Render a poll bubble with live results; tapping an option votes.
+function pollNode(m) {
+  const poll = m.poll;
+  const total = poll.votes.length;
+  const myVotes = new Set(poll.votes.filter((v) => v.userId === state.me.id).map((v) => v.option));
+  const wrap = el('div', { class: 'poll' });
+  wrap.append(el('div', { class: 'poll-q' }, poll.question));
+  poll.options.forEach((opt, i) => {
+    const count = poll.votes.filter((v) => v.option === i).length;
+    const pct = total ? Math.round((count / total) * 100) : 0;
+    const row = el('div', { class: 'poll-opt' + (myVotes.has(i) ? ' voted' : '') },
+      el('div', { class: 'poll-fill', style: `width:${pct}%` }),
+      el('div', { class: 'poll-opt-label' }, (myVotes.has(i) ? '✓ ' : '') + opt),
+      el('div', { class: 'poll-opt-count' }, String(count)));
+    row.onclick = () => { if (state.socket) state.socket.emit('poll:vote', { messageId: m.id, option: i }); };
+    wrap.append(row);
+  });
+  wrap.append(el('div', { class: 'poll-total' },
+    (total === 0 ? 'Sem votos ainda' : `${total} voto(s)`) + (poll.multi ? ' · múltipla escolha' : '')));
+  return wrap;
 }
 
 async function sendFile(file) {
@@ -1283,7 +1539,22 @@ function setupComposer() {
     input.setSelectionRange(pos, pos);
     input.dispatchEvent(new Event('input'));
   });
-  $('#attach-btn').onclick = () => $('#file-input').click();
+  $('#attach-btn').onclick = (e) => {
+    document.querySelector('.popup-menu')?.remove();
+    const menu = el('div', { class: 'popup-menu' });
+    const item = (label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
+      ev.stopPropagation(); menu.remove(); fn();
+    } }, label);
+    menu.append(item('📎 Foto ou arquivo', () => $('#file-input').click()));
+    menu.append(item('📊 Enquete', () => pollComposeModal()));
+    menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
+    document.body.append(menu);
+    const r = e.currentTarget.getBoundingClientRect();
+    menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
+    menu.style.top = `${r.top - menu.offsetHeight - 6}px`;
+    const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
+    setTimeout(() => document.addEventListener('click', close), 0);
+  };
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
@@ -1324,13 +1595,25 @@ async function toggleVoiceRecording() {
   if (!state.activeChatId) return;
   let stream;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: AUDIO_CONSTRAINTS });
   } catch {
     toast('Não foi possível acessar o microfone');
     return;
   }
   recordedChunks = [];
-  mediaRecorder = new MediaRecorder(stream);
+  // Mono Opus at a low bitrate: great speech quality, ~2-4x smaller files than
+  // the browser default, so voice notes still send on slow/mobile networks.
+  // (This is where a native Lyra encoder would slot in on Android — see LYRA.md.)
+  const recOpts = { audioBitsPerSecond: 24000 };
+  if (typeof MediaRecorder.isTypeSupported === 'function'
+      && MediaRecorder.isTypeSupported('audio/webm;codecs=opus')) {
+    recOpts.mimeType = 'audio/webm;codecs=opus';
+  }
+  try {
+    mediaRecorder = new MediaRecorder(stream, recOpts);
+  } catch {
+    mediaRecorder = new MediaRecorder(stream); // fall back to browser defaults
+  }
   mediaRecorder.ondataavailable = (e) => { if (e.data.size) recordedChunks.push(e.data); };
   mediaRecorder.onstop = async () => {
     stream.getTracks().forEach((t) => t.stop());
@@ -1425,6 +1708,104 @@ function newChatModal() {
   setTimeout(() => search.focus(), 50);
 }
 
+// ------------------------------------------------------------------ contacts (agenda)
+async function contactsModal() {
+  const list = el('div', {});
+  const newBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px',
+    onclick: () => contactFormModal(null, null, refresh) }, '＋ Novo contato');
+  const body = el('div', { class: 'modal-body' }, newBtn, list);
+  const backdrop = modalShell('Contatos', body);
+
+  async function refresh() {
+    list.innerHTML = '';
+    let contacts = [];
+    try { ({ contacts } = await api.listContacts()); }
+    catch { list.append(el('p', { class: 'auth-hint' }, 'Falha ao carregar contatos.')); return; }
+    if (!contacts.length) {
+      list.append(el('p', { class: 'auth-hint' }, 'Nenhum contato salvo ainda. Toque em "Novo contato".'));
+      return;
+    }
+    for (const c of contacts) {
+      const avatar = el('span', { class: 'avatar sm' });
+      avatarBg(avatar, c.user && c.user.avatarUrl, c.displayName);
+      const subParts = [];
+      if (c.phone) subParts.push(c.phone);
+      if (c.email) subParts.push(c.email);
+      if (c.user) subParts.push('@' + c.user.username);
+      const edit = el('button', { class: 'icon-btn', title: 'Editar',
+        onclick: (e) => { e.stopPropagation(); contactFormModal(c, null, refresh); } }, '✎');
+      const del = el('button', { class: 'icon-btn', title: 'Excluir',
+        onclick: async (e) => {
+          e.stopPropagation();
+          if (!confirm(`Excluir ${c.displayName}?`)) return;
+          await api.deleteContact(c.id); refresh();
+        } }, '🗑');
+      const row = el('div', { class: 'user-result' }, avatar,
+        el('div', { class: 'user-result-body' },
+          el('div', { class: 'user-result-name' }, c.displayName),
+          el('div', { class: 'user-result-sub' }, subParts.join(' · ') || 'Contato salvo')),
+        edit, del);
+      // Tapping a contact linked to a SpeedVox user opens the conversation.
+      if (c.userId) {
+        row.style.cursor = 'pointer';
+        row.onclick = async () => {
+          try {
+            const { chat } = await api.openDirect(c.userId);
+            state.chats.set(chat.id, chat);
+            state.socket.emit('chat:join', { chatId: chat.id });
+            backdrop.remove();
+            await openChat(chat.id);
+          } catch { toast('Não foi possível abrir a conversa'); }
+        };
+      }
+      list.append(row);
+    }
+  }
+  refresh();
+}
+
+// Add or edit a contact. `existing` = contact to edit; `prefill` = initial values
+// (e.g. when saving someone from a chat); `onSaved` = callback to refresh a list.
+function contactFormModal(existing, prefill, onSaved) {
+  const data = existing || prefill || {};
+  const name = el('input', { type: 'text', placeholder: 'Nome', value: data.displayName || '' });
+  const phone = el('input', { type: 'text', placeholder: 'Telefone (opcional)', value: data.phone || '' });
+  const email = el('input', { type: 'text', placeholder: 'E-mail (opcional)', value: data.email || '' });
+  const note = el('input', { type: 'text', placeholder: 'Observação (opcional)', value: data.note || '' });
+  const error = el('p', { class: 'auth-error' });
+
+  const save = el('button', { class: 'btn-primary', onclick: async () => {
+    if (!name.value.trim()) { error.textContent = 'Informe o nome do contato'; return; }
+    const payload = {
+      displayName: name.value.trim(),
+      phone: phone.value.trim(),
+      email: email.value.trim(),
+      note: note.value.trim(),
+    };
+    try {
+      if (existing) {
+        await api.updateContact(existing.id, payload);
+        toast('Contato atualizado');
+      } else {
+        if (prefill && prefill.userId) payload.userId = prefill.userId;
+        await api.addContact(payload);
+        toast('Contato salvo');
+      }
+      backdrop.remove();
+      if (onSaved) onSaved();
+    } catch (err) { error.textContent = err.message; }
+  } }, existing ? 'Salvar alterações' : 'Salvar contato');
+
+  const body = el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Nome'), name,
+    el('div', { class: 'field-label' }, 'Telefone'), phone,
+    el('div', { class: 'field-label' }, 'E-mail'), email,
+    el('div', { class: 'field-label' }, 'Observação'), note,
+    error, save);
+  const backdrop = modalShell(existing ? 'Editar contato' : 'Novo contato', body);
+  setTimeout(() => name.focus(), 50);
+}
+
 function newGroupModal() {
   const selected = new Map();
   const nameInput = el('input', { type: 'text', placeholder: 'Nome do grupo' });
@@ -1494,6 +1875,39 @@ function makeAvatarUploadable(node, name, onUploaded) {
   return node;
 }
 
+// Open my personal "Saved Messages" chat (Telegram-style).
+async function openSavedMessages() {
+  try {
+    const { chat } = await api.openSaved();
+    state.chats.set(chat.id, chat);
+    state.socket.emit('chat:join', { chatId: chat.id });
+    await openChat(chat.id);
+  } catch { toast('Não foi possível abrir as Mensagens salvas'); }
+}
+
+// Copy a public invite link (Telegram t.me-style) that opens a chat with me.
+function shareMyLink() {
+  const link = `${location.origin}/?u=${encodeURIComponent(state.me.username)}`;
+  const done = () => toast('Link copiado: ' + link);
+  if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Seu link:', link));
+  else prompt('Seu link:', link);
+}
+
+// Resolve a ?u=username deep link into an open conversation.
+async function openUserByUsername(username) {
+  const uname = String(username || '').toLowerCase().trim();
+  if (!uname || uname === state.me.username) return;
+  try {
+    const { users } = await api.searchUsers(uname);
+    const u = users.find((x) => x.username && x.username.toLowerCase() === uname) || users[0];
+    if (!u) return toast('Usuário não encontrado: @' + uname);
+    const { chat } = await api.openDirect(u.id);
+    state.chats.set(chat.id, chat);
+    state.socket.emit('chat:join', { chatId: chat.id });
+    await openChat(chat.id);
+  } catch { toast('Não foi possível abrir a conversa'); }
+}
+
 function profileModal() {
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
@@ -1519,14 +1933,28 @@ function profileModal() {
       el('div', { class: 'field-label' }, 'Usuário'),
       el('div', {}, '@' + state.me.username)),
     el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openSavedMessages(); } }, '🔖 Mensagens salvas')),
+    el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); showStarredMessages(); } }, '★ Mensagens favoritas')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: shareMyLink }, '🔗 Compartilhar meu link')),
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); privacyModal(); } }, '🔒 Privacidade')),
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); linkDeviceModal(); } }, '📱 Vincular um dispositivo')),
     el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Baixar mídias automaticamente'),
+      autoDownloadRow()),
+    el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
-      meshToggleRow()));
+      meshToggleRow()),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openOfflineMode(); } }, '📡 Modo Offline')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Diagnóstico Mesh')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary sos-btn', onclick: () => { backdrop.remove(); sendSOS(); } },
+        '🆘 Emergência (SOS)')));
   const footer = el('div', { class: 'modal-footer' }, save);
   const backdrop = modalShell('Perfil', body, footer);
 }
@@ -1605,21 +2033,208 @@ async function showStarredMessages() {
   const backdrop = modalShell('Mensagens favoritas', body);
 }
 
+// Per-device media auto-download preference (like WhatsApp). On by default.
+function autoDownloadOn() { return localStorage.getItem('speedvox_autodownload') !== '0'; }
+
+function autoDownloadRow() {
+  const on = autoDownloadOn();
+  const label = el('span', {}, on ? 'Ativado' : 'Só ao tocar em "Baixar"');
+  const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
+    on ? 'Desativar' : 'Ativar');
+  btn.onclick = () => {
+    const next = !autoDownloadOn();
+    localStorage.setItem('speedvox_autodownload', next ? '1' : '0');
+    label.textContent = next ? 'Ativado' : 'Só ao tocar em "Baixar"';
+    btn.textContent = next ? 'Desativar' : 'Ativar';
+    if (state.activeChatId) renderMessages();
+    toast(next ? 'Mídias baixam automaticamente' : 'Mídias só baixam quando você pedir');
+  };
+  return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+}
+
 function meshToggleRow() {
   const label = el('span', {}, state.mesh.enabled ? 'Ativado' : 'Desativado');
   const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
     state.mesh.enabled ? 'Desativar' : 'Ativar');
-  btn.onclick = () => {
+  btn.onclick = async () => {
     state.mesh.setEnabled(!state.mesh.enabled);
     label.textContent = state.mesh.enabled ? 'Ativado' : 'Desativado';
     btn.textContent = state.mesh.enabled ? 'Desativar' : 'Ativar';
     if (state.mesh.enabled) {
       // Try to peer with everyone we currently know is online.
       for (const [uid, p] of state.presence) if (p.online) state.mesh.connect(uid);
-      toast('Modo mesh ativado: mensagens podem trafegar peer-to-peer');
+      // Start the native zero-infrastructure transport, if present.
+      if (state.meshNearby && state.meshNearby.available) { try { await state.meshNearby.start(); } catch {} }
+      const extra = state.meshNearby && state.meshNearby.available ? ' (Bluetooth/Wi-Fi Direct ativo)' : '';
+      toast('Modo mesh ativado: mensagens podem trafegar peer-to-peer' + extra);
+    } else if (state.meshNearby && state.meshNearby.available) {
+      try { await state.meshNearby.stop(); } catch {}
     }
   };
   return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+}
+
+// ------------------------------------------------------------------ offline mode UI
+async function openOfflineMode() {
+  const online = Boolean(state.socket && state.socket.connected);
+  const native = offline.nativeAvailable(state.meshNearby);
+  const peers = state.mesh ? state.mesh.status().peers : 0;
+
+  let stateText;
+  if (online) stateText = 'Você está online. O modo offline está de reserva.';
+  else if (state.mesh && state.mesh.enabled && peers > 0) stateText = `Modo Mesh ativo. ${peers} dispositivo(s) próximo(s).`;
+  else if (state.mesh && state.mesh.enabled) stateText = 'Modo Mesh ativo. Procurando pessoas próximas…';
+  else stateText = 'Sem internet e modo mesh desligado.';
+
+  const body = el('div', { class: 'modal-body' },
+    el('div', { class: 'offline-state' }, stateText),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
+      meshToggleRow()),
+    el('p', { class: 'auth-hint' },
+      'No modo offline, o SpeedVox tenta falar diretamente com aparelhos próximos '
+      + '(sem internet), repassando mensagens de aparelho em aparelho até chegar ao destino.'),
+    el('div', { class: 'offline-transport' },
+      el('strong', {}, 'Transporte por perto: '),
+      native ? 'Disponível (Bluetooth / Wi-Fi Direct)' : 'Indisponível neste dispositivo'),
+    native ? '' : el('p', { class: 'auth-hint' },
+      'No navegador, o alcance real por Bluetooth/Wi-Fi Direct depende do app Android '
+      + 'instalado (APK). Aqui você já pode gerar sua identidade e rodar o diagnóstico.'),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Abrir Diagnóstico Mesh')));
+  const backdrop = modalShell('Modo Offline', body);
+}
+
+async function openMeshDiagnostics() {
+  const body = el('div', { class: 'modal-body' }, el('p', { class: 'auth-hint' }, 'Carregando diagnóstico…'));
+  const backdrop = modalShell('Diagnóstico Mesh', body);
+
+  const row = (k, v) => el('div', { class: 'diag-row' },
+    el('span', { class: 'diag-k' }, k), el('span', { class: 'diag-v' }, v));
+
+  let id = null;
+  try { id = await offline.ensureIdentity(state.me.displayName); }
+  catch (e) { body.innerHTML = ''; body.append(el('p', { class: 'auth-hint' },
+    'Este dispositivo não suporta a criptografia necessária (Ed25519/X25519). '
+    + 'Atualize o navegador/WebView do Android. Detalhe: ' + ((e && e.message) || e))); return; }
+
+  const pid = offline.publicIdentity();
+  const meshStatus = state.mesh ? state.mesh.status() : { peers: 0, held: 0, enabled: false };
+  const native = offline.nativeAvailable(state.meshNearby);
+  const be = await offline.meshBackendInfo();
+
+  // Crypto self-test (the key signal for "does my phone work").
+  const test = await offline.cryptoSelfTest();
+  const testNode = el('div', { class: 'diag-test' },
+    el('div', { class: 'diag-test-head' }, test.ok ? '✅ Criptografia OK neste aparelho' : '❌ Falha de criptografia'),
+    ...test.steps.map((s) => el('div', { class: 'diag-step' }, (s.ok ? '✓ ' : '✗ ') + s.name)),
+    test.error ? el('div', { class: 'diag-step' }, 'Erro: ' + test.error) : '');
+
+  body.innerHTML = '';
+  body.append(
+    el('h4', { class: 'diag-h' }, 'Identidade local'),
+    row('deviceId', pid ? pid.deviceId : '—'),
+    row('Chave pública (assinatura)', pid ? pid.signPub.slice(0, 24) + '…' : '—'),
+    row('Chave pública (troca)', pid ? pid.kxPub.slice(0, 24) + '…' : '—'),
+
+    el('h4', { class: 'diag-h' }, 'Criptografia (autoteste)'),
+    testNode,
+
+    el('h4', { class: 'diag-h' }, 'Malha (neste app)'),
+    row('Modo mesh', meshStatus.enabled ? 'Ativado' : 'Desligado'),
+    row('Peers conectados', String(meshStatus.peers)),
+    row('Mensagens retidas (store-and-forward)', String(meshStatus.held || 0)),
+    row('Transporte por perto (BLE/Wi-Fi Direct)', native ? 'Disponível' : 'Indisponível (requer app Android)'),
+
+    el('h4', { class: 'diag-h' }, 'Backend mesh'),
+    row('Status', be.status ? (be.status.enabled ? 'ativo' : 'desativado') : 'inacessível'),
+    row('Sync', be.status ? (be.status.syncEnabled ? 'ativo' : 'desativado') : '—'),
+    row('TTL máx. / lote máx.', be.config ? `${be.config.maxTTL} / ${be.config.maxBatchSize}` : '—'),
+
+    el('h4', { class: 'diag-h' }, 'Nearby Mesh (offline)'),
+    nearbyControl(backdrop),
+
+    el('div', { class: 'diag-actions' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => { backdrop.remove(); openMeshDiagnostics(); } }, '🔄 Rodar de novo'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          try { await navigator.clipboard.writeText(JSON.stringify(pid)); toast('Identidade pública copiada'); }
+          catch { toast('Não foi possível copiar'); }
+        } }, '📋 Copiar identidade pública'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          const r = await offline.registerDevice().catch((e) => ({ error: e.message }));
+          toast(r && r.ok ? 'Dispositivo registrado no servidor' : ('Falha: ' + ((r && r.error) || 'erro')));
+        } }, '☁️ Registrar no servidor'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          try {
+            const r = await offline.syncPull();
+            toast(`Sincronizado: ${r.verified}/${r.pulled} mensagem(ns) verificada(s) do servidor`);
+          } catch (e) { toast('Falha ao sincronizar: ' + ((e && e.message) || e)); }
+        } }, '🔁 Sincronizar mesh'),
+      el('button', { class: 'btn-primary sos-btn',
+        onclick: async () => {
+          if (!confirm('Resetar a identidade offline? Isto gera novas chaves e um novo deviceId.')) return;
+          await offline.resetIdentity(state.me.displayName);
+          backdrop.remove(); openMeshDiagnostics();
+        } }, '🗑️ Resetar identidade')));
+}
+
+// Live "Iniciar Nearby Mesh" control: starts advertising+discovery via the
+// native plugin and shows the state (running, peers, errors). On the web it is
+// disabled with an explanation, since BLE/Wi-Fi Direct need the Android app.
+function nearbyControl(backdrop) {
+  const wrap = el('div', { class: 'diag-test' });
+  const status = el('div', { class: 'diag-test-head' }, '—');
+  const detail = el('div', { class: 'diag-step' }, '');
+  const ctrl = state.meshNearby;
+  const available = offline.nativeAvailable(ctrl);
+
+  const btn = el('button', { class: 'btn-primary', style: 'margin-top:8px' },
+    available ? '▶ Iniciar Nearby Mesh' : 'Indisponível neste dispositivo');
+  if (!available) btn.setAttribute('disabled', '');
+
+  const refresh = () => {
+    if (!available) {
+      status.textContent = '⚪ Indisponível (requer o app Android — APK)';
+      detail.textContent = 'No navegador não há acesso a Bluetooth/Wi-Fi Direct.';
+      return;
+    }
+    const running = Boolean(ctrl.running);
+    const peers = state.mesh ? state.mesh.status().peers : 0;
+    status.textContent = running ? '🟢 Anunciando e procurando aparelhos…' : '⚪ Parado';
+    detail.textContent = running
+      ? `startAdvertising + startDiscovery ativos · ${peers} aparelho(s) conectado(s)`
+        + (ctrl.lastError ? ` · erro: ${ctrl.lastError}` : '')
+      : 'Toque para anunciar este aparelho e procurar outros por perto.';
+    btn.textContent = running ? '⏹ Parar Nearby Mesh' : '▶ Iniciar Nearby Mesh';
+  };
+
+  btn.onclick = async () => {
+    if (!available) return;
+    try {
+      if (ctrl.running) {
+        await ctrl.stop();
+      } else {
+        if (state.mesh && !state.mesh.enabled) state.mesh.setEnabled(true);
+        await ctrl.start();
+      }
+    } catch (e) { toast('Falha no Nearby: ' + ((e && e.message) || e)); }
+    refresh();
+  };
+
+  // Live updates while the screen is open.
+  refresh();
+  const timer = setInterval(() => {
+    if (!backdrop || !backdrop.isConnected) { clearInterval(timer); return; }
+    refresh();
+  }, 1500);
+
+  wrap.append(status, detail, btn);
+  return wrap;
 }
 
 // Dropdown to choose the disappearing-messages timer for a chat.
@@ -1738,6 +2353,17 @@ function showChatInfo() {
     };
   }
 
+  // Save the other person to my contacts (direct chats only).
+  let saveContactBtn = '';
+  if (!isGroup && chat.otherUser) {
+    saveContactBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-top:10px',
+      onclick: () => contactFormModal(null, {
+        displayName: chat.otherUser.displayName,
+        email: chat.otherUser.email || '',
+        userId: chat.otherUser.id,
+      }) }, '＋ Salvar nos contatos');
+  }
+
   const body = el('div', { class: 'modal-body' },
     big,
     titleNode,
@@ -1746,6 +2372,7 @@ function showChatInfo() {
     el('div', { class: 'field-label' }, isGroup ? `${chat.members.length} participantes` : 'Contato'),
     members,
     addBtn,
+    saveContactBtn,
     blockBtn,
     leave);
   const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);
@@ -1930,7 +2557,7 @@ function viewStatuses(statuses, user, isMine) {
     content.style.backgroundImage = '';
     if (s.type === 'image' && s.mediaUrl) {
       content.style.background = '#000';
-      content.append(el('img', { class: 'status-img', src: s.mediaUrl }));
+      content.append(el('img', { class: 'status-img', src: mediaUrl(s.mediaUrl) }));
       if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
     } else {
       content.append(el('div', { class: 'status-text' }, s.body || ''));
@@ -2054,16 +2681,22 @@ async function startApp(user) {
   }
 
   // Fetch ICE servers (STUN + optional TURN) so calls work behind restrictive NATs.
-  try { state.iceServers = (await (await fetch('/api/ice')).json()).iceServers; } catch { state.iceServers = null; }
+  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'))).json()).iceServers; } catch { state.iceServers = null; }
 
   connectSocket();
   setupMesh();
+  // Generate/persist the offline cryptographic identity and register it with the
+  // backend (best-effort). Failures never block the app (e.g. old WebView).
+  offline.ensureIdentity(state.me.displayName)
+    .then(() => offline.registerDevice().catch(() => {}))
+    .catch((e) => console.warn('[offline] identidade indisponível:', e && e.message));
   setupCalls();
   setupComposer();
   await loadChats();
   updateNetIndicator();
 
-  $('#new-chat-btn').onclick = newChatModal;
+  $('#fab-new-chat').onclick = newChatModal;
+  $('#contacts-btn').onclick = contactsModal;
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;
@@ -2073,8 +2706,37 @@ async function startApp(user) {
   refreshStatusIndicator();
 }
 
+// PWA installation: capture the browser's install event and offer a button.
+function setupInstallPrompt() {
+  let deferred = null;
+  const show = () => {
+    if (document.getElementById('install-app-btn')) return;
+    const btn = el('button', { id: 'install-app-btn', class: 'install-app-btn' }, '⬇️ Instalar app');
+    btn.onclick = async () => {
+      if (!deferred) return;
+      btn.disabled = true;
+      deferred.prompt();
+      try { await deferred.userChoice; } catch {}
+      deferred = null;
+      btn.remove();
+    };
+    document.body.append(btn);
+  };
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferred = e;
+    show();
+  });
+  window.addEventListener('appinstalled', () => {
+    const b = document.getElementById('install-app-btn');
+    if (b) b.remove();
+    toast('SpeedVox instalado!');
+  });
+}
+
 async function boot() {
   setupAuthScreen();
+  checkVerifiedParam();
 
   // Pick up a token handed back by the Google OAuth callback.
   if (location.hash.startsWith('#token=')) {
@@ -2085,9 +2747,17 @@ async function boot() {
   window.addEventListener('online', () => { state.online = true; updateNetIndicator(); });
   window.addEventListener('offline', () => { state.online = false; updateNetIndicator(); });
 
+  // PWA install affordance: when the browser deems the app installable, show an
+  // "Instalar app" button so visitors can add it to the home screen.
+  setupInstallPrompt();
+
   // Probe whether Google sign-in is configured to hide the button if not.
   try {
-    const res = await fetch('/api/health');
+    // Point the Google button at the absolute server (so it isn't a 404 when the
+    // app is loaded from local assets in the native build).
+    const gbtn = $('#google-btn');
+    if (gbtn) gbtn.href = apiUrl('/api/auth/google');
+    const res = await fetch(apiUrl('/api/health'));
     const h = await res.json();
     if (!h.google) {
       $('#google-btn').classList.add('hidden');
@@ -2119,6 +2789,12 @@ async function boot() {
       if (state.chats.has(chatParam)) { clearInterval(tryOpen); openChat(chatParam); }
     }, 300);
     setTimeout(() => clearInterval(tryOpen), 6000);
+  }
+  // Public invite deep link: ?u=username opens a chat with that person.
+  const userParam = new URLSearchParams(location.search).get('u');
+  if (userParam && getToken()) {
+    history.replaceState(null, '', location.pathname);
+    setTimeout(() => openUserByUsername(userParam), 800);
   }
 
   if ('serviceWorker' in navigator) {

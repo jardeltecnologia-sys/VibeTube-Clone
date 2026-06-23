@@ -32,7 +32,11 @@ function isOnline(userId) {
 }
 
 function setup(httpServer) {
-  const io = new Server(httpServer, { maxHttpBufferSize: 1e7 });
+  const io = new Server(httpServer, {
+    maxHttpBufferSize: 1e7,
+    // Allow the bundled native app's local origin to connect (web stays same-origin).
+    cors: { origin: config.corsOrigins, credentials: true },
+  });
   require('./bus').setIo(io); // let REST routes push realtime updates
 
   // Authenticate every socket from its handshake token.
@@ -153,8 +157,26 @@ function setup(httpServer) {
     for (const uid of targets) push.sendToUser(uid, payload).catch(() => {});
   }
 
+  // Deliver scheduled messages whose time has come.
+  function deliverScheduled() {
+    const due = db
+      .prepare('SELECT * FROM messages WHERE send_at IS NOT NULL AND send_at <= ?')
+      .all(now());
+    for (const row of due) {
+      db.prepare('UPDATE messages SET send_at = NULL WHERE id = ?').run(row.id);
+      const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(row.id));
+      emitToChat(row.chat_id, 'message:new', { message });
+      for (const memberId of getMemberIds(row.chat_id)) {
+        io.to(`user:${memberId}`).emit('chat:update', getChatSummary(row.chat_id, memberId));
+      }
+      const sender = db.prepare('SELECT * FROM users WHERE id = ?').get(row.sender_id);
+      if (sender) notifyPush(row.chat_id, sender, message);
+    }
+  }
+
   // Periodically delete expired (disappearing) messages and notify members.
   function sweepExpired() {
+    deliverScheduled();
     // Expired statuses (24h stories) and stale device-link codes are removed.
     db.prepare('DELETE FROM statuses WHERE expires_at <= ?').run(now());
     db.prepare('DELETE FROM link_requests WHERE expires_at <= ?').run(now());
@@ -225,20 +247,36 @@ function setup(httpServer) {
           if (typeof cb === 'function') cb({ error: 'mensagem vazia' });
           return;
         }
+        // Polls (Telegram-style): body carries { question, options[], multi }.
+        if (msgType === 'poll') {
+          let meta;
+          try { meta = JSON.parse(body); } catch { meta = null; }
+          const opts = meta && Array.isArray(meta.options)
+            ? meta.options.map((o) => String(o).trim()).filter(Boolean) : [];
+          if (!meta || !String(meta.question || '').trim() || opts.length < 2 || opts.length > 10) {
+            if (typeof cb === 'function') cb({ error: 'enquete inválida' });
+            return;
+          }
+        }
         const msgId = id();
         const ts = now();
+        // Scheduled messages: held back (invisible) until the sweeper delivers.
+        const sendAt = Number(payload.sendAt) || 0;
+        const scheduled = sendAt > ts + 2000;
         // Encrypted bodies are opaque ciphertext — keep them verbatim (no trim).
         const storedBody = encrypted ? body : (body ? body.trim() : null);
-        // Disappearing messages: stamp an expiry if the chat has a timer set.
+        // Disappearing messages: stamp an expiry if the chat has a timer set
+        // (counted from delivery time for scheduled messages).
         const chatRow = db.prepare('SELECT disappearing_timer FROM chats WHERE id = ?').get(chatId);
         const timer = chatRow ? chatRow.disappearing_timer : 0;
-        const expiresAt = timer > 0 ? ts + timer * 1000 : null;
+        const baseTime = scheduled ? sendAt : ts;
+        const expiresAt = timer > 0 ? baseTime + timer * 1000 : null;
         // Keep only mentions that are actual members of this chat.
         const validMentions = Array.isArray(mentions)
           ? [...new Set(mentions)].filter((uid) => isMember(chatId, uid)) : [];
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, send_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -253,8 +291,16 @@ function setup(httpServer) {
           forwarded ? 1 : 0,
           expiresAt,
           validMentions.length ? JSON.stringify(validMentions) : null,
-          ts
+          scheduled ? sendAt : null,
+          scheduled ? sendAt : ts
         );
+
+        // Scheduled: store and stop here — the sweeper delivers it when due.
+        if (scheduled) {
+          if (typeof cb === 'function') cb({ ok: true, scheduled: true, sendAt });
+          return;
+        }
+
         const message = serializeMessage(db.prepare('SELECT * FROM messages WHERE id = ?').get(msgId));
 
         if (shieldedByPartner) {
@@ -356,6 +402,30 @@ function setup(httpServer) {
       }
       const reactions = db.prepare('SELECT user_id, emoji FROM reactions WHERE message_id = ?').all(messageId);
       emitToChat(msg.chat_id, 'message:reaction', { messageId, reactions });
+    });
+
+    // --- Vote in a poll ---
+    socket.on('poll:vote', ({ messageId, option }) => {
+      const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
+      if (!msg || msg.type !== 'poll' || msg.deleted || !isMember(msg.chat_id, userId)) return;
+      let meta;
+      try { meta = JSON.parse(msg.body); } catch { return; }
+      const idx = Number(option);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= meta.options.length) return;
+      const has = db.prepare('SELECT 1 FROM poll_votes WHERE message_id = ? AND user_id = ? AND option_index = ?')
+        .get(messageId, userId, idx);
+      if (has) {
+        db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ? AND option_index = ?')
+          .run(messageId, userId, idx);
+      } else {
+        if (!meta.multi) db.prepare('DELETE FROM poll_votes WHERE message_id = ? AND user_id = ?').run(messageId, userId);
+        db.prepare('INSERT OR IGNORE INTO poll_votes (message_id, user_id, option_index) VALUES (?, ?, ?)')
+          .run(messageId, userId, idx);
+      }
+      const votes = db.prepare('SELECT user_id, option_index FROM poll_votes WHERE message_id = ?').all(messageId);
+      emitToChat(msg.chat_id, 'poll:update', {
+        messageId, chatId: msg.chat_id, votes: votes.map((v) => ({ userId: v.user_id, option: v.option_index })),
+      });
     });
 
     // --- Edit a text message (sender only) ---

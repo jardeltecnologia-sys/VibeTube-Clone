@@ -3,21 +3,38 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v18';
+const CACHE = 'speedvox-shell-v30';
 const SHELL = [
   '/',
   '/index.html',
   '/css/styles.css',
   '/js/app.js',
+  '/js/env.js',
   '/js/api.js',
   '/js/mesh.js',
+  '/js/mesh-nearby.js',
+  '/js/offline.js',
   '/js/calls.js',
   '/js/groupcall.js',
+  '/js/webrtc-quality.js',
+  '/js/ringtone.js',
   '/js/e2ee.js',
   '/js/ratchet.js',
   '/js/qrcode.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-512-maskable.png',
+  '/icons/icon-180.png',
+  // Mesh core (Phase 2) — cached so identity/diagnostics work offline too.
+  '/mesh-core/index.js',
+  '/mesh-core/identity.js',
+  '/mesh-core/crypto.js',
+  '/mesh-core/envelope.js',
+  '/mesh-core/dedupe.js',
+  '/mesh-core/forward.js',
+  '/mesh-core/base64.js',
 ];
 
 self.addEventListener('install', (event) => {

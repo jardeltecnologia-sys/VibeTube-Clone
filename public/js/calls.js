@@ -2,7 +2,17 @@
 // The Socket.IO server only relays signaling (SDP/ICE); audio and video flow
 // directly peer-to-peer. The module owns its own full-screen call UI.
 
+import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
+import * as ringtone from './ringtone.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+// How long to wait for ICE to connect before giving up.
+const ICE_TIMEOUT_MS = 30000;
+// How long to wait after 'disconnected'/'failed' before closing the call.
+const GRACE_MS = 20000;
+// Max ICE restarts before giving up.
+const MAX_ICE_RESTARTS = 3;
 
 export class CallManager {
   constructor({ socket, selfId, iceServers }) {
@@ -18,6 +28,9 @@ export class CallManager {
     this.pendingIce = [];
     this.timer = null;
     this.startedAt = 0;
+    this.graceTimer = null;
+    this.iceTimer = null;    // Connection-establishment timeout
+    this.iceRestarts = 0;
     this._bindSignals();
     this._buildUI();
   }
@@ -36,32 +49,148 @@ export class CallManager {
 
   async _ensureMedia() {
     if (this.localStream) return this.localStream;
-    this.localStream = await navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: this.media === 'video',
-    });
+    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
     this.localVideo.srcObject = this.localStream;
     return this.localStream;
   }
 
   _createPeer() {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection({ iceServers: this.iceServers, iceCandidatePoolSize: 4 });
     this.pc = pc;
+    this.iceRestarts = 0;
+    this._startIceTimeout();
+
     for (const track of this.localStream.getTracks()) pc.addTrack(track, this.localStream);
+
     pc.onicecandidate = (e) => {
       if (e.candidate) {
         this.socket.emit('call:ice', { to: this.peer.id, callId: this.callId, candidate: e.candidate });
       }
     };
+
     pc.ontrack = (e) => {
       this.remoteVideo.srcObject = e.streams[0];
       this._setStatus(this.media === 'video' ? '' : 'Em chamada');
     };
-    pc.onconnectionstatechange = () => {
-      if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) this.hangup(true);
-      if (pc.connectionState === 'connected') this._startTimer();
-    };
+
+    // Watch both state properties — they update at slightly different times
+    // across browsers. Using both gives us the earliest signal.
+    pc.onconnectionstatechange = () => this._onConnState(pc);
+    pc.oniceconnectionstatechange = () => this._onIceState(pc);
+
     return pc;
+  }
+
+  // ---------- connection state (high-level: new/connecting/connected/failed/closed) ----------
+  _onConnState(pc) {
+    // Guard: ignore events that arrive after this PC was replaced or cleared.
+    if (pc !== this.pc) return;
+    const st = pc.connectionState;
+    if (!st) return;
+
+    if (st === 'connected') {
+      this._onConnected();
+    } else if (st === 'failed') {
+      this._onFailed();
+    } else if (st === 'disconnected') {
+      this._setStatus('Reconectando…');
+      this._startGrace();
+    } else if (st === 'closed') {
+      this._onClosed();
+    }
+  }
+
+  // ---------- ICE state (lower-level: checking/connected/completed/failed/disconnected) -------
+  _onIceState(pc) {
+    if (pc !== this.pc) return;
+    const st = pc.iceConnectionState;
+    if (!st) return;
+
+    if (st === 'connected' || st === 'completed') {
+      this._onConnected();
+    } else if (st === 'failed') {
+      this._onFailed();
+    } else if (st === 'disconnected') {
+      this._setStatus('Reconectando…');
+      this._startGrace();
+    } else if (st === 'closed') {
+      this._onClosed();
+    }
+  }
+
+  _onConnected() {
+    this._clearGrace();
+    this._clearIceTimeout();
+    if (this.iceRestarts > 0) this.iceRestarts = 0;
+    this._startTimer();
+    this._setStatus(this.media === 'video' ? '' : 'Em chamada');
+  }
+
+  _onFailed() {
+    this._setStatus('Reconectando…');
+    this._tryIceRestart();
+    this._startGrace();
+  }
+
+  // Only called when the PC itself is closed (not from _reset — that guards against this).
+  _onClosed() {
+    if (this.callId) this.hangup(true);
+  }
+
+  // ---------------------------------------------------------------- grace / timers
+  _startGrace() {
+    if (this.graceTimer) return;
+    this.graceTimer = setTimeout(() => {
+      this.graceTimer = null;
+      if (!this.pc) return;
+      const connSt = this.pc.connectionState;
+      const iceSt = this.pc.iceConnectionState;
+      const ok = connSt === 'connected' || iceSt === 'connected' || iceSt === 'completed';
+      if (!ok) this.hangup(true);
+    }, GRACE_MS);
+  }
+
+  _clearGrace() {
+    if (this.graceTimer) { clearTimeout(this.graceTimer); this.graceTimer = null; }
+  }
+
+  // Watchdog: if ICE never reaches 'connected' after creating the peer, give up.
+  _startIceTimeout() {
+    this._clearIceTimeout();
+    this.iceTimer = setTimeout(() => {
+      this.iceTimer = null;
+      if (!this.pc) return;
+      const connSt = this.pc.connectionState;
+      const iceSt = this.pc.iceConnectionState;
+      const ok = connSt === 'connected' || iceSt === 'connected' || iceSt === 'completed';
+      if (!ok) {
+        this._toast('Não foi possível conectar. Verifique sua conexão.');
+        this.hangup(true);
+      }
+    }, ICE_TIMEOUT_MS);
+  }
+
+  _clearIceTimeout() {
+    if (this.iceTimer) { clearTimeout(this.iceTimer); this.iceTimer = null; }
+  }
+
+  // ICE restart: both sides can initiate. Caller sends new offer with iceRestart,
+  // callee responds. If callee triggers this it sends a re-invite signal so the
+  // caller knows to re-offer.
+  async _tryIceRestart() {
+    const pc = this.pc;
+    if (!pc || this.iceRestarts >= MAX_ICE_RESTARTS) return;
+    this.iceRestarts += 1;
+    if (this.role === 'caller') {
+      try {
+        const offer = await pc.createOffer({ iceRestart: true });
+        offer.sdp = tuneAudioSdp(offer.sdp);
+        await pc.setLocalDescription(offer);
+        this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
+      } catch { /* grace timer will handle cleanup */ }
+    }
+    // Callee: caller will detect the failure too and re-offer via its own _onFailed.
+    // No action needed on the callee side.
   }
 
   // ---------------------------------------------------------------- outgoing
@@ -80,16 +209,25 @@ export class CallManager {
     }
     this._showOverlay('outgoing');
     this._setStatus('Chamando…');
+    ringtone.startOutgoing();
     this.socket.emit('call:invite', { to: peer.id, callId: this.callId, media });
   }
 
   async _onAccepted({ callId }) {
     if (callId !== this.callId || this.role !== 'caller') return;
+    ringtone.stop();
     const pc = this._createPeer();
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
-    this._setStatus('Conectando…');
+    try {
+      const offer = await pc.createOffer();
+      offer.sdp = tuneAudioSdp(offer.sdp);
+      await pc.setLocalDescription(offer);
+      if (this.media === 'video') capVideoBitrate(pc);
+      this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
+      this._setStatus('Conectando…');
+    } catch {
+      this._toast('Erro ao iniciar chamada');
+      this.hangup();
+    }
   }
 
   _onRejected({ callId }) {
@@ -97,6 +235,7 @@ export class CallManager {
     this._toast('Chamada recusada');
     this.hangup(true);
   }
+
   _onUnavailable({ callId }) {
     if (callId !== this.callId) return;
     this._toast('Usuário indisponível');
@@ -106,7 +245,6 @@ export class CallManager {
   // ---------------------------------------------------------------- incoming
   _onIncoming({ from, callId, media }) {
     if (this.callId) {
-      // Already busy — auto reject.
       this.socket.emit('call:reject', { to: from.id, callId });
       return;
     }
@@ -116,9 +254,11 @@ export class CallManager {
     this.role = 'callee';
     this._showOverlay('incoming');
     this._setStatus(media === 'video' ? 'Chamada de vídeo recebida' : 'Chamada recebida');
+    ringtone.startIncoming();
   }
 
   async _accept() {
+    ringtone.stop();
     try {
       await this._ensureMedia();
     } catch {
@@ -140,15 +280,22 @@ export class CallManager {
   // ---------------------------------------------------------------- sdp / ice
   async _onSdp({ callId, sdp }) {
     if (callId !== this.callId || !this.pc) return;
-    await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
-    for (const c of this.pendingIce.splice(0)) {
-      try { await this.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
-    }
-    if (sdp.type === 'offer') {
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
-      this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: this.pc.localDescription });
-      this._showOverlay('active');
+    try {
+      await this.pc.setRemoteDescription(new RTCSessionDescription(sdp));
+      for (const c of this.pendingIce.splice(0)) {
+        try { await this.pc.addIceCandidate(new RTCIceCandidate(c)); } catch {}
+      }
+      if (sdp.type === 'offer') {
+        const answer = await this.pc.createAnswer();
+        answer.sdp = tuneAudioSdp(answer.sdp);
+        await this.pc.setLocalDescription(answer);
+        if (this.media === 'video') capVideoBitrate(this.pc);
+        this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: this.pc.localDescription });
+        this._showOverlay('active');
+        this._setStatus('Conectando…');
+      }
+    } catch (err) {
+      console.error('[SpeedVox] SDP error:', err);
     }
   }
 
@@ -172,14 +319,27 @@ export class CallManager {
   }
 
   _reset() {
+    ringtone.stop();
+    this._clearGrace();
+    this._clearIceTimeout();
     if (this.timer) { clearInterval(this.timer); this.timer = null; }
-    if (this.pc) { try { this.pc.close(); } catch {} this.pc = null; }
-    if (this.localStream) { this.localStream.getTracks().forEach((t) => t.stop()); this.localStream = null; }
+    if (this.pc) {
+      // Null BEFORE close() so that onconnectionstatechange → _onConnState / _onClosed
+      // does NOT re-enter hangup() / _reset() while we are tearing down.
+      const pc = this.pc;
+      this.pc = null;
+      try { pc.close(); } catch {}
+    }
+    if (this.localStream) {
+      this.localStream.getTracks().forEach((t) => t.stop());
+      this.localStream = null;
+    }
     this.pendingIce = [];
     this.callId = null;
     this.peer = null;
     this.role = null;
     this.startedAt = 0;
+    this.iceRestarts = 0;
     this.overlay.classList.add('hidden');
     this.remoteVideo.srcObject = null;
     this.localVideo.srcObject = null;
@@ -252,7 +412,6 @@ export class CallManager {
       avatar.textContent = (this.peer.displayName || '?').slice(0, 2).toUpperCase();
     }
     this.overlay.querySelector('.call-name').textContent = this.peer.displayName || '';
-    // Show the "accept" button only while a call is incoming and unanswered.
     this.btnAccept.style.display = phase === 'incoming' ? '' : 'none';
     this.btnCam.style.display = this.media === 'video' ? '' : 'none';
   }

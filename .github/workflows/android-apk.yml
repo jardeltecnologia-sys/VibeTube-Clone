@@ -1,14 +1,18 @@
 name: Build Android APK
 
 # Roda manualmente: aba "Actions" → "Build Android APK" → "Run workflow".
-# Informe a URL HTTPS pública do seu servidor SpeedVox; o APK gerado abrirá esse
-# servidor. Baixe o APK no fim do run (Artifacts) ou na Release criada.
+#
+# Agora o APK é OFFLINE-CAPABLE: o app inteiro (public/) + o mesh-core são
+# EMBARCADOS nos assets, e o Capacitor NÃO usa server.url — abre dos assets
+# locais (funciona sem internet). A URL informada vira a BASE de API absoluta
+# (window.SPEEDVOX_SERVER) usada só quando há internet para login/chat/chamadas.
 on:
   workflow_dispatch:
     inputs:
       server_url:
-        description: 'URL HTTPS do seu servidor SpeedVox (ex.: https://speedvox.onrender.com)'
+        description: 'URL HTTPS do servidor SpeedVox (base de API quando online)'
         required: true
+        default: 'https://chat.vibetube.com.br'
         type: string
 
 permissions:
@@ -39,12 +43,25 @@ jobs:
         working-directory: mobile
         run: npm install
 
-      - name: Inject server URL into Capacitor config
-        working-directory: mobile
+      - name: Bundle full web app + mesh-core into Capacitor www
+        run: |
+          rm -rf mobile/www
+          mkdir -p mobile/www
+          cp -r public/. mobile/www/
+          mkdir -p mobile/www/mesh-core
+          cp -r packages/mesh-core/src/. mobile/www/mesh-core/
+          # Vendor the Socket.IO browser client so the bundled app has `io`
+          # locally (the server's /socket.io/socket.io.js isn't reachable offline).
+          npm install socket.io-client@^4.8.3 --no-save --no-audit --no-fund
+          mkdir -p mobile/www/socket.io
+          cp node_modules/socket.io-client/dist/socket.io.min.js mobile/www/socket.io/socket.io.js
+          echo "Conteúdo de mobile/www:"; ls -la mobile/www
+
+      - name: Inject API base (window.SPEEDVOX_SERVER) into bundled index.html
         env:
           SERVER_URL: ${{ inputs.server_url }}
         run: |
-          node -e "const fs=require('fs');const f='capacitor.config.json';const c=JSON.parse(fs.readFileSync(f));c.server.url=process.env.SERVER_URL;fs.writeFileSync(f,JSON.stringify(c,null,2));console.log('server.url =>',c.server.url)"
+          node -e "const fs=require('fs');const f='mobile/www/index.html';let h=fs.readFileSync(f,'utf8');const tag='<script>window.SPEEDVOX_SERVER=\"'+process.env.SERVER_URL+'\";</script>';h=h.includes('</head>')?h.replace('</head>',tag+'\n</head>'):tag+h;fs.writeFileSync(f,h);console.log('window.SPEEDVOX_SERVER =>',process.env.SERVER_URL)"
 
       - name: Sync Android project
         working-directory: mobile
@@ -59,6 +76,48 @@ jobs:
       - name: Rename APK
         run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk speedvox-${{ github.run_number }}.apk
 
+      - name: Inspect APK (evidence report)
+        run: |
+          APK=speedvox-${{ github.run_number }}.apk
+          echo "================ RELATÓRIO DE EVIDÊNCIAS DO APK ================"
+          echo "## Tamanho:"; ls -lh $APK | awk '{print $5, $9}'
+          echo
+          echo "## capacitor.config.json embarcado:"; unzip -p $APK assets/capacitor.config.json || true
+          echo
+          echo "## server.url presente? (esperado: NENHUM = app abre offline)"
+          if unzip -p $APK assets/capacitor.config.json | grep -q '"url"'; then echo "❌ ACHOU server.url"; else echo "✅ OK: sem server.url (assets locais)"; fi
+          echo
+          echo "## index.html embarcado é o app real? (procura a tela de login)"
+          N=$(unzip -p $APK assets/public/index.html | grep -c 'auth-screen' || true); echo "ocorrências de 'auth-screen': $N"
+          echo
+          echo "## App e mesh-core embarcados?"
+          unzip -l $APK | grep -E 'assets/public/js/app.js' && echo "✅ app.js embarcado" || echo "❌ app.js faltando"
+          unzip -l $APK | grep -E 'assets/public/js/env.js' && echo "✅ env.js embarcado" || echo "❌ env.js faltando"
+          unzip -l $APK | grep -E 'assets/public/mesh-core/index.js' && echo "✅ mesh-core embarcado" || echo "❌ mesh-core faltando"
+          echo
+          echo "## Plugin nativo SpeedvoxNearby presente no dex?"
+          FOUND=0
+          for d in $(unzip -Z1 $APK | grep -E '^classes.*\.dex$'); do
+            if unzip -p $APK "$d" | strings | grep -Eq 'SpeedvoxNearby|P2P_CLUSTER|app.speedvox.mesh'; then
+              FOUND=1
+              unzip -p $APK "$d" | strings | grep -Eo 'SpeedvoxNearby[A-Za-z]*|P2P_CLUSTER|app.speedvox.mesh' | sort -u | sed 's/^/   /'
+            fi
+          done
+          [ $FOUND -eq 1 ] && echo "✅ OK: plugin Nearby compilado no APK" || echo "❌ plugin não encontrado no dex"
+          echo
+          echo "## Permissões de Bluetooth/Wi-Fi no APK:"
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt 2>/dev/null | head -1 || true)
+          if [ -n "$AAPT" ]; then
+            "$AAPT" dump permissions $APK | grep -iE 'BLUETOOTH|NEARBY_WIFI|WIFI_STATE|FINE_LOCATION' | sort -u | sed 's/^/   /' || echo "   (aapt: nenhuma)"
+          else
+            # Binary AXML stores strings as UTF-16, so use strings -e l (16-bit LE).
+            unzip -p $APK AndroidManifest.xml | strings -e l | grep -iE 'BLUETOOTH|NEARBY_WIFI|WIFI_STATE|FINE_LOCATION' | sort -u | sed 's/^/   /' || echo "   (nenhuma encontrada)"
+          fi
+          echo
+          echo "## Lib do Nearby (play-services) embarcada?"
+          unzip -l $APK | grep -i 'nearby' | head | sed 's/^/   /' || echo "   (não listada por nome)"
+          echo "==============================================================="
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
@@ -71,7 +130,13 @@ jobs:
           tag_name: apk-${{ github.run_number }}
           name: SpeedVox APK (build ${{ github.run_number }})
           body: |
-            APK de teste do SpeedVox apontando para `${{ inputs.server_url }}`.
-            Instale no Android (permita "instalar de fontes desconhecidas") e
-            compartilhe este link com seus amigos para testarem juntos.
+            APK OFFLINE-CAPABLE do SpeedVox (build ${{ github.run_number }}).
+
+            - App inteiro + mesh-core EMBARCADOS (abre sem internet).
+            - Sem server.url: assets carregam localmente.
+            - Base de API quando online: `${{ inputs.server_url }}`.
+            - Plugin nativo Nearby (Bluetooth/Wi-Fi Direct) incluído.
+
+            Veja o passo "Inspect APK (evidence report)" do run para a prova do
+            conteúdo do pacote. Instale permitindo "fontes desconhecidas".
           files: speedvox-${{ github.run_number }}.apk

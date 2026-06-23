@@ -1,5 +1,7 @@
 // Lightweight REST client for SpeedVox. Stores the session token in localStorage.
 
+import { apiUrl } from './env.js';
+
 const TOKEN_KEY = 'speedvox_token';
 
 export function getToken() {
@@ -21,12 +23,13 @@ async function request(method, path, body, isForm = false) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`/api${path}`, { method, headers, body: payload });
+  const res = await fetch(apiUrl(`/api${path}`), { method, headers, body: payload });
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {
     const err = new Error((data && data.error) || `HTTP ${res.status}`);
     err.status = res.status;
+    err.data = data; // expose fields like needsVerification/email to callers
     throw err;
   }
   return data;
@@ -35,6 +38,7 @@ async function request(method, path, body, isForm = false) {
 export const api = {
   register: (d) => request('POST', '/auth/register', d),
   login: (d) => request('POST', '/auth/login', d),
+  resendVerification: (email) => request('POST', '/auth/resend-verification', { email }),
   me: () => request('GET', '/auth/me'),
 
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
@@ -45,11 +49,16 @@ export const api = {
   getBlocks: () => request('GET', '/users/me/blocks'),
   getPrivacy: () => request('GET', '/users/me/privacy'),
   setPrivacy: (d) => request('PATCH', '/users/me/privacy', d),
+  listContacts: () => request('GET', '/contacts'),
+  addContact: (d) => request('POST', '/contacts', d),
+  updateContact: (id, d) => request('PATCH', `/contacts/${id}`, d),
+  deleteContact: (id) => request('DELETE', `/contacts/${id}`),
   linkNew: () => request('POST', '/link/new'),
   linkStatus: (code) => request('GET', `/link/status?code=${encodeURIComponent(code)}`),
   linkApprove: (code) => request('POST', '/link/approve', { code }),
 
   listChats: () => request('GET', '/chats'),
+  openSaved: () => request('POST', '/chats/saved'),
   openDirect: (userId) => request('POST', '/chats/direct', { userId }),
   createGroup: (name, memberIds) => request('POST', '/chats/group', { name, memberIds }),
   getChat: (id) => request('GET', `/chats/${id}`),
