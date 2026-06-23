@@ -168,6 +168,32 @@ CREATE TABLE IF NOT EXISTS poll_votes (
   FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
+
+-- VibeTube Mesh / SpeedVox Offline Mode (additive). Offline devices register a
+-- public identity and, when back online, sync the offline messages they relayed.
+CREATE TABLE IF NOT EXISTS mesh_devices (
+  device_id    TEXT PRIMARY KEY,       -- derived from the signing public key
+  public_key   TEXT NOT NULL,          -- shareable public bundle (JSON: signPub, kxPub)
+  display_name TEXT,
+  user_id      TEXT,                   -- optional link to a SpeedVox account
+  first_seen_at INTEGER NOT NULL,
+  last_seen_at  INTEGER NOT NULL,
+  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS mesh_messages (
+  message_id     TEXT PRIMARY KEY,     -- envelope messageId (dedup key)
+  type           TEXT NOT NULL,
+  from_device_id TEXT,
+  to_device_id   TEXT,
+  room_id        TEXT,
+  envelope       TEXT NOT NULL,        -- full signed envelope (JSON)
+  created_at     INTEGER NOT NULL,     -- envelope createdAt
+  received_at    INTEGER NOT NULL,     -- when the server accepted it
+  expires_at     INTEGER               -- retention cutoff
+);
+CREATE INDEX IF NOT EXISTS idx_mesh_messages_received ON mesh_messages(received_at);
+CREATE INDEX IF NOT EXISTS idx_mesh_messages_room ON mesh_messages(room_id, received_at);
 `);
 
 // Migrations for databases created before these columns existed.

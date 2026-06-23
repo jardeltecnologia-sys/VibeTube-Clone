@@ -76,6 +76,26 @@ const config = {
   // Group size cap. Text messaging scales to large groups; group *calls* are
   // full-mesh and only practical for small groups regardless of this number.
   groupMaxMembers: parseInt(process.env.GROUP_MAX_MEMBERS || '1024', 10),
+
+  // --- VibeTube Mesh / SpeedVox Offline Mode (additive, feature-flagged) ---
+  // The offline mesh is an additional layer; these flags never change existing
+  // online behavior. Defaults are conservative and safe for production.
+  mesh: {
+    // Master switch for the mesh backend endpoints (/api/mesh/*).
+    enabled: process.env.MESH_ENABLED !== '0',
+    // Whether the backend accepts offline message sync batches.
+    syncEnabled: process.env.MESH_SYNC_ENABLED !== '0',
+    // Whether the Android offline build is considered available (for clients).
+    androidEnabled: process.env.MESH_ANDROID_ENABLED !== '0',
+    // On Web/PWA, offer only an explainer + diagnostics (no fake BLE mesh).
+    webDiagnosticOnly: process.env.MESH_WEB_DIAGNOSTIC_ONLY !== '0',
+    // Limits surfaced via /api/mesh/config and enforced by /api/mesh/sync.
+    maxMessageBytes: parseInt(process.env.MESH_MAX_MESSAGE_BYTES || '4096', 10),
+    maxBatchSize: parseInt(process.env.MESH_MAX_BATCH_SIZE || '100', 10),
+    maxTTL: parseInt(process.env.MESH_MAX_TTL || '5', 10),
+    maxOfflineRetentionDays: parseInt(process.env.MESH_MAX_OFFLINE_RETENTION_DAYS || '7', 10),
+    allowAttachmentsOffline: process.env.MESH_ALLOW_ATTACHMENTS_OFFLINE === '1',
+  },
 };
 
 // E-mail verification is on when SMTP is configured (or in test mode).
