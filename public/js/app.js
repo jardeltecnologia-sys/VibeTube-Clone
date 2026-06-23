@@ -2700,6 +2700,34 @@ async function startApp(user) {
   refreshStatusIndicator();
 }
 
+// PWA installation: capture the browser's install event and offer a button.
+function setupInstallPrompt() {
+  let deferred = null;
+  const show = () => {
+    if (document.getElementById('install-app-btn')) return;
+    const btn = el('button', { id: 'install-app-btn', class: 'install-app-btn' }, '⬇️ Instalar app');
+    btn.onclick = async () => {
+      if (!deferred) return;
+      btn.disabled = true;
+      deferred.prompt();
+      try { await deferred.userChoice; } catch {}
+      deferred = null;
+      btn.remove();
+    };
+    document.body.append(btn);
+  };
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferred = e;
+    show();
+  });
+  window.addEventListener('appinstalled', () => {
+    const b = document.getElementById('install-app-btn');
+    if (b) b.remove();
+    toast('SpeedVox instalado!');
+  });
+}
+
 async function boot() {
   setupAuthScreen();
   checkVerifiedParam();
@@ -2712,6 +2740,10 @@ async function boot() {
 
   window.addEventListener('online', () => { state.online = true; updateNetIndicator(); });
   window.addEventListener('offline', () => { state.online = false; updateNetIndicator(); });
+
+  // PWA install affordance: when the browser deems the app installable, show an
+  // "Instalar app" button so visitors can add it to the home screen.
+  setupInstallPrompt();
 
   // Probe whether Google sign-in is configured to hide the button if not.
   try {

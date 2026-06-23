@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v29';
+const CACHE = 'speedvox-shell-v30';
 const SHELL = [
   '/',
   '/index.html',
@@ -23,6 +23,10 @@ const SHELL = [
   '/js/qrcode.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+  '/icons/icon-512-maskable.png',
+  '/icons/icon-180.png',
   // Mesh core (Phase 2) — cached so identity/diagnostics work offline too.
   '/mesh-core/index.js',
   '/mesh-core/identity.js',
