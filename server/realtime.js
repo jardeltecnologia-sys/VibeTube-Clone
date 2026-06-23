@@ -32,7 +32,11 @@ function isOnline(userId) {
 }
 
 function setup(httpServer) {
-  const io = new Server(httpServer, { maxHttpBufferSize: 1e7 });
+  const io = new Server(httpServer, {
+    maxHttpBufferSize: 1e7,
+    // Allow the bundled native app's local origin to connect (web stays same-origin).
+    cors: { origin: config.corsOrigins, credentials: true },
+  });
   require('./bus').setIo(io); // let REST routes push realtime updates
 
   // Authenticate every socket from its handshake token.

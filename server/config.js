@@ -30,9 +30,21 @@ loadEnvFile();
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const PUBLIC_URL = (process.env.PUBLIC_URL || `http://localhost:${PORT}`).replace(/\/$/, '');
 
+// Cross-origin allow-list. The web/PWA is same-origin (needs nothing), but the
+// bundled native app loads from a local origin (https://localhost on Android,
+// capacitor://localhost on iOS) and must be allowed to reach the API + Socket.IO.
+// Extra origins can be added via CORS_ORIGINS (comma-separated).
+const CORS_ORIGINS = [
+  'https://localhost',
+  'http://localhost',
+  'capacitor://localhost',
+  ...(process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',').map((s) => s.trim()).filter(Boolean) : []),
+];
+
 const config = {
   port: PORT,
   publicUrl: PUBLIC_URL,
+  corsOrigins: CORS_ORIGINS,
   jwtSecret: process.env.JWT_SECRET || 'speedvox-dev-secret-change-me',
   google: {
     clientId: process.env.GOOGLE_CLIENT_ID || '',

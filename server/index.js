@@ -11,6 +11,23 @@ const realtime = require('./realtime');
 
 const app = express();
 app.set('trust proxy', true); // behind Caddy/Cloudflare: use X-Forwarded-For for req.ip
+
+// CORS for the bundled native app (loads from a local origin and must reach the
+// API cross-origin). Browsers on the same origin send no Origin header for
+// same-origin requests, so this is a no-op for the normal web/PWA.
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && config.corsOrigins.includes(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+  }
+  next();
+});
+
 app.use(express.json({ limit: '2mb' }));
 
 // Simple request logging.

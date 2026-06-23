@@ -1,5 +1,7 @@
 // Lightweight REST client for SpeedVox. Stores the session token in localStorage.
 
+import { apiUrl } from './env.js';
+
 const TOKEN_KEY = 'speedvox_token';
 
 export function getToken() {
@@ -21,7 +23,7 @@ async function request(method, path, body, isForm = false) {
     headers['Content-Type'] = 'application/json';
     payload = JSON.stringify(body);
   }
-  const res = await fetch(`/api${path}`, { method, headers, body: payload });
+  const res = await fetch(apiUrl(`/api${path}`), { method, headers, body: payload });
   let data = null;
   try { data = await res.json(); } catch { /* no body */ }
   if (!res.ok) {

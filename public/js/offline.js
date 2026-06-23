@@ -7,6 +7,7 @@
 // the el()/modalShell()/toast() helpers. mesh-core is served at /mesh-core/.
 
 import * as mc from '/mesh-core/index.js';
+import { apiUrl } from './env.js';
 
 const IDENTITY_KEY = 'speedvox_mesh_identity';
 const TOKEN_KEY = 'speedvox_token';
@@ -74,7 +75,7 @@ export async function registerDevice() {
   const headers = { 'Content-Type': 'application/json' };
   const token = localStorage.getItem(TOKEN_KEY);
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch('/api/mesh/register-device', {
+  const res = await fetch(apiUrl('/api/mesh/register-device'), {
     method: 'POST',
     headers,
     body: JSON.stringify({
@@ -89,8 +90,8 @@ export async function registerDevice() {
 // Fetch the backend's mesh status + config (Phase 1 endpoints).
 export async function meshBackendInfo() {
   const [s, c] = await Promise.allSettled([
-    fetch('/api/mesh/status').then((r) => r.json()),
-    fetch('/api/mesh/config').then((r) => r.json()),
+    fetch(apiUrl('/api/mesh/status')).then((r) => r.json()),
+    fetch(apiUrl('/api/mesh/config')).then((r) => r.json()),
   ]);
   return {
     status: s.status === 'fulfilled' ? s.value : null,

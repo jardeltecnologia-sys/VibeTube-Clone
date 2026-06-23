@@ -1,12 +1,21 @@
 package app.speedvox.nearby;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
+
 import androidx.annotation.NonNull;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+
+import java.util.ArrayList;
+import java.util.List;
 
 import com.google.android.gms.nearby.Nearby;
 import com.google.android.gms.nearby.connection.AdvertisingOptions;
@@ -57,8 +66,41 @@ public class SpeedvoxNearbyPlugin extends Plugin {
         return connectionsClient;
     }
 
+    // Runtime permissions Nearby Connections needs, by SDK level. Requested
+    // best-effort on start(); if not yet granted, the radios fail and emit
+    // meshError, and the user can grant + retry.
+    private String[] requiredPermissions() {
+        List<String> perms = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 31) { // Android 12+
+            perms.add(Manifest.permission.BLUETOOTH_ADVERTISE);
+            perms.add(Manifest.permission.BLUETOOTH_CONNECT);
+            perms.add(Manifest.permission.BLUETOOTH_SCAN);
+        } else {
+            perms.add(Manifest.permission.BLUETOOTH);
+            perms.add(Manifest.permission.BLUETOOTH_ADMIN);
+            perms.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+        if (Build.VERSION.SDK_INT >= 33) { // Android 13+
+            perms.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+        }
+        return perms.toArray(new String[0]);
+    }
+
+    private void ensurePermissions() {
+        List<String> missing = new ArrayList<>();
+        for (String p : requiredPermissions()) {
+            if (ContextCompat.checkSelfPermission(getContext(), p) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(p);
+            }
+        }
+        if (!missing.isEmpty() && getActivity() != null) {
+            ActivityCompat.requestPermissions(getActivity(), missing.toArray(new String[0]), 9123);
+        }
+    }
+
     @PluginMethod
     public void start(PluginCall call) {
+        ensurePermissions();
         String userId = call.getString("userId", "");
         String displayName = call.getString("displayName", "");
         localName = userId + SEP + displayName;

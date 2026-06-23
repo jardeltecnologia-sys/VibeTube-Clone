@@ -3,8 +3,6 @@
   "appName": "SpeedVox",
   "webDir": "www",
   "server": {
-    "url": "https://SEU-SERVIDOR-SPEEDVOX.exemplo.com",
-    "cleartext": false,
     "androidScheme": "https"
   }
 }

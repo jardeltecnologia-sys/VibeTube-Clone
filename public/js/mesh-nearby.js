@@ -59,17 +59,25 @@ export function attachNearby(mesh, { displayName } = {}) {
   };
 
   let handles = [];
-  return {
+  const controller = {
     available: true,
+    running: false,
+    lastError: null,
+    endpoints: endpointToUser,
     async start() {
+      if (controller.running) return;
+      controller.lastError = null;
+      const onError = (ev) => { controller.lastError = (ev && ev.message) || 'erro'; };
       handles = [
         await Nearby.addListener('peerConnected', onConnected),
         await Nearby.addListener('peerLost', onLost),
         await Nearby.addListener('payload', onPayload),
+        await Nearby.addListener('meshError', onError),
       ];
       // Advertise AND discover at once (P2P_CLUSTER) so every device both finds
       // and is found — the basis of an ad-hoc mesh.
       await Nearby.start({ userId: mesh.selfId, displayName: displayName || mesh.selfId });
+      controller.running = true;
     },
     async stop() {
       try { await Nearby.stop(); } catch {}
@@ -77,6 +85,8 @@ export function attachNearby(mesh, { displayName } = {}) {
       handles = [];
       for (const userId of endpointToUser.values()) mesh.removeLink(userId);
       endpointToUser.clear();
+      controller.running = false;
     },
   };
+  return controller;
 }

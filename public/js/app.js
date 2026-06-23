@@ -1,4 +1,5 @@
 import { api, getToken, setToken } from './api.js';
+import { API_BASE, apiUrl, mediaUrl, isNative } from './env.js';
 import { MeshManager } from './mesh.js';
 import { attachNearby } from './mesh-nearby.js';
 import * as ringtone from './ringtone.js';
@@ -244,7 +245,10 @@ async function linkNewDeviceFlow() {
 
 // ------------------------------------------------------------------ socket
 function connectSocket() {
-  const socket = io({ auth: { token: getToken() } });
+  // Same-origin for the web/PWA; absolute server URL for the bundled native app.
+  const socket = API_BASE
+    ? io(API_BASE, { auth: { token: getToken() }, transports: ['websocket', 'polling'] })
+    : io({ auth: { token: getToken() } });
   state.socket = socket;
 
   socket.on('connect', () => { updateNetIndicator(); flushOutbox(); });
@@ -2142,6 +2146,9 @@ async function openMeshDiagnostics() {
     row('Sync', be.status ? (be.status.syncEnabled ? 'ativo' : 'desativado') : '—'),
     row('TTL máx. / lote máx.', be.config ? `${be.config.maxTTL} / ${be.config.maxBatchSize}` : '—'),
 
+    el('h4', { class: 'diag-h' }, 'Nearby Mesh (offline)'),
+    nearbyControl(backdrop),
+
     el('div', { class: 'diag-actions' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
         onclick: async () => { backdrop.remove(); openMeshDiagnostics(); } }, '🔄 Rodar de novo'),
@@ -2161,6 +2168,60 @@ async function openMeshDiagnostics() {
           await offline.resetIdentity(state.me.displayName);
           backdrop.remove(); openMeshDiagnostics();
         } }, '🗑️ Resetar identidade')));
+}
+
+// Live "Iniciar Nearby Mesh" control: starts advertising+discovery via the
+// native plugin and shows the state (running, peers, errors). On the web it is
+// disabled with an explanation, since BLE/Wi-Fi Direct need the Android app.
+function nearbyControl(backdrop) {
+  const wrap = el('div', { class: 'diag-test' });
+  const status = el('div', { class: 'diag-test-head' }, '—');
+  const detail = el('div', { class: 'diag-step' }, '');
+  const ctrl = state.meshNearby;
+  const available = offline.nativeAvailable(ctrl);
+
+  const btn = el('button', { class: 'btn-primary', style: 'margin-top:8px' },
+    available ? '▶ Iniciar Nearby Mesh' : 'Indisponível neste dispositivo');
+  if (!available) btn.setAttribute('disabled', '');
+
+  const refresh = () => {
+    if (!available) {
+      status.textContent = '⚪ Indisponível (requer o app Android — APK)';
+      detail.textContent = 'No navegador não há acesso a Bluetooth/Wi-Fi Direct.';
+      return;
+    }
+    const running = Boolean(ctrl.running);
+    const peers = state.mesh ? state.mesh.status().peers : 0;
+    status.textContent = running ? '🟢 Anunciando e procurando aparelhos…' : '⚪ Parado';
+    detail.textContent = running
+      ? `startAdvertising + startDiscovery ativos · ${peers} aparelho(s) conectado(s)`
+        + (ctrl.lastError ? ` · erro: ${ctrl.lastError}` : '')
+      : 'Toque para anunciar este aparelho e procurar outros por perto.';
+    btn.textContent = running ? '⏹ Parar Nearby Mesh' : '▶ Iniciar Nearby Mesh';
+  };
+
+  btn.onclick = async () => {
+    if (!available) return;
+    try {
+      if (ctrl.running) {
+        await ctrl.stop();
+      } else {
+        if (state.mesh && !state.mesh.enabled) state.mesh.setEnabled(true);
+        await ctrl.start();
+      }
+    } catch (e) { toast('Falha no Nearby: ' + ((e && e.message) || e)); }
+    refresh();
+  };
+
+  // Live updates while the screen is open.
+  refresh();
+  const timer = setInterval(() => {
+    if (!backdrop || !backdrop.isConnected) { clearInterval(timer); return; }
+    refresh();
+  }, 1500);
+
+  wrap.append(status, detail, btn);
+  return wrap;
 }
 
 // Dropdown to choose the disappearing-messages timer for a chat.
@@ -2607,7 +2668,7 @@ async function startApp(user) {
   }
 
   // Fetch ICE servers (STUN + optional TURN) so calls work behind restrictive NATs.
-  try { state.iceServers = (await (await fetch('/api/ice')).json()).iceServers; } catch { state.iceServers = null; }
+  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'))).json()).iceServers; } catch { state.iceServers = null; }
 
   connectSocket();
   setupMesh();
@@ -2647,7 +2708,7 @@ async function boot() {
 
   // Probe whether Google sign-in is configured to hide the button if not.
   try {
-    const res = await fetch('/api/health');
+    const res = await fetch(apiUrl('/api/health'));
     const h = await res.json();
     if (!h.google) {
       $('#google-btn').classList.add('hidden');
