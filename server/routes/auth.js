@@ -175,6 +175,19 @@ router.get('/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user), google: { enabled: config.google.enabled } });
 });
 
+// Resolve the OAuth redirect URI. If PUBLIC_URL is explicitly configured we
+// trust it; otherwise we DERIVE it from the host actually serving the request
+// (honoring X-Forwarded-Proto/Host behind Cloudflare/Caddy). This avoids the
+// most common Google error — redirect_uri_mismatch — when PUBLIC_URL is unset
+// and defaults to localhost. The same URI is used to start AND finish the flow,
+// so the two always match.
+function googleRedirectUri(req) {
+  if (process.env.PUBLIC_URL) return `${config.publicUrl}/api/auth/google/callback`;
+  const proto = (req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0].trim();
+  const host = req.get('host');
+  return `${proto}://${host}/api/auth/google/callback`;
+}
+
 // --- Google OAuth: start ---
 router.get('/google', (req, res) => {
   if (!config.google.enabled) {
@@ -183,7 +196,7 @@ router.get('/google', (req, res) => {
   const state = crypto.randomBytes(16).toString('hex');
   const params = new URLSearchParams({
     client_id: config.google.clientId,
-    redirect_uri: config.google.redirectUri,
+    redirect_uri: googleRedirectUri(req),
     response_type: 'code',
     scope: 'openid email profile',
     access_type: 'offline',
@@ -196,6 +209,10 @@ router.get('/google', (req, res) => {
 // --- Google OAuth: callback ---
 router.get('/google/callback', async (req, res) => {
   if (!config.google.enabled) return res.status(503).send('Google não configurado.');
+  // Google reports user-side failures (denied consent, etc.) as a query param.
+  if (req.query.error) {
+    return res.status(400).send(`Google recusou o login: ${String(req.query.error)}`);
+  }
   const { code } = req.query;
   if (!code) return res.status(400).send('Código de autorização ausente.');
 
@@ -207,12 +224,18 @@ router.get('/google/callback', async (req, res) => {
         code: String(code),
         client_id: config.google.clientId,
         client_secret: config.google.clientSecret,
-        redirect_uri: config.google.redirectUri,
+        redirect_uri: googleRedirectUri(req),
         grant_type: 'authorization_code',
       }),
     });
     const tokens = await tokenRes.json();
-    if (!tokens.access_token) throw new Error('Falha ao obter token do Google');
+    if (!tokens.access_token) {
+      // Surface Google's reason (e.g. redirect_uri_mismatch, invalid_client) so
+      // the cause is visible instead of a generic 500.
+      const reason = tokens.error_description || tokens.error || 'sem access_token';
+      console.error('Google token exchange failed:', reason);
+      return res.status(400).send(`Erro ao autenticar com o Google: ${reason}`);
+    }
 
     const profileRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
       headers: { Authorization: `Bearer ${tokens.access_token}` },

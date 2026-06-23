@@ -103,3 +103,39 @@ export async function meshBackendInfo() {
 export function nativeAvailable(meshNearby) {
   return Boolean(meshNearby && meshNearby.available);
 }
+
+// ---------------------------------------------------------------- server bridge
+// Push a batch of locally-relayed signed envelopes to the server so peers who
+// reach the internet later can pull them (partial-blackout bridge).
+export async function syncPush(envelopes) {
+  if (!envelopes || !envelopes.length) return { accepted: [], duplicates: [], rejected: [] };
+  const res = await fetch(apiUrl('/api/mesh/sync'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messages: envelopes }),
+  });
+  return res.json();
+}
+
+const CURSOR_KEY = 'speedvox_mesh_pull_cursor';
+export function getPullCursor() { return Number(localStorage.getItem(CURSOR_KEY) || '0'); }
+
+// Pull envelopes other devices relayed, advancing a persistent cursor. Each
+// envelope is cryptographically verified with mesh-core; tampered ones are
+// dropped. Returns counts so the diagnostics screen can show progress.
+export async function syncPull() {
+  const id = getIdentity();
+  const deviceId = id ? id.deviceId : '';
+  const since = getPullCursor();
+  const url = apiUrl(`/api/mesh/pull?since=${since}${deviceId ? `&deviceId=${encodeURIComponent(deviceId)}` : ''}`);
+  const res = await fetch(url);
+  const data = await res.json();
+  const msgs = (data && data.messages) || [];
+  let verified = 0;
+  const valid = [];
+  for (const env of msgs) {
+    try { if (await mc.verifyEnvelope(env)) { verified += 1; valid.push(env); } } catch { /* drop */ }
+  }
+  if (data && typeof data.cursor === 'number') localStorage.setItem(CURSOR_KEY, String(data.cursor));
+  return { pulled: msgs.length, verified, messages: valid };
+}

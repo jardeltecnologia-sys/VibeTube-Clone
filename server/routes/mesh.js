@@ -133,6 +133,31 @@ router.post('/sync', meshGate, (req, res) => {
   res.json({ accepted, rejected, duplicates, serverTime: ts });
 });
 
+// Pull offline messages relayed by OTHER devices since a cursor. This bridges
+// offline "islands": a device that briefly gets internet uploads (sync) what it
+// relayed; peers pull it when they get internet. Cursor = received_at; clients
+// dedup by messageId, so same-millisecond ties are harmless.
+router.get('/pull', meshGate, (req, res) => {
+  if (!config.mesh.syncEnabled) return res.status(503).json({ error: 'sync disabled' });
+  const since = Number(req.query.since) || 0;
+  const deviceId = req.query.deviceId ? String(req.query.deviceId) : null;
+  const limit = Math.min(Number(req.query.limit) || config.mesh.maxBatchSize, config.mesh.maxBatchSize);
+  const ts = now();
+  const rows = db.prepare(
+    `SELECT envelope, received_at FROM mesh_messages
+     WHERE received_at > ? AND (expires_at IS NULL OR expires_at > ?)
+       AND (? IS NULL OR from_device_id IS NULL OR from_device_id != ?)
+     ORDER BY received_at ASC LIMIT ?`
+  ).all(since, ts, deviceId, deviceId, limit);
+  const messages = [];
+  let cursor = since;
+  for (const r of rows) {
+    try { messages.push(JSON.parse(r.envelope)); } catch { /* skip corrupt */ }
+    cursor = r.received_at;
+  }
+  res.json({ messages, cursor, serverTime: ts });
+});
+
 // Structural ("básica") validation. Returns null if OK, else a reason string.
 function validateEnvelope(m) {
   if (!m || typeof m !== 'object') return 'not-an-object';

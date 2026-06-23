@@ -2162,6 +2162,13 @@ async function openMeshDiagnostics() {
           const r = await offline.registerDevice().catch((e) => ({ error: e.message }));
           toast(r && r.ok ? 'Dispositivo registrado no servidor' : ('Falha: ' + ((r && r.error) || 'erro')));
         } }, '☁️ Registrar no servidor'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          try {
+            const r = await offline.syncPull();
+            toast(`Sincronizado: ${r.verified}/${r.pulled} mensagem(ns) verificada(s) do servidor`);
+          } catch (e) { toast('Falha ao sincronizar: ' + ((e && e.message) || e)); }
+        } }, '🔁 Sincronizar mesh'),
       el('button', { class: 'btn-primary sos-btn',
         onclick: async () => {
           if (!confirm('Resetar a identidade offline? Isto gera novas chaves e um novo deviceId.')) return;
@@ -2708,6 +2715,10 @@ async function boot() {
 
   // Probe whether Google sign-in is configured to hide the button if not.
   try {
+    // Point the Google button at the absolute server (so it isn't a 404 when the
+    // app is loaded from local assets in the native build).
+    const gbtn = $('#google-btn');
+    if (gbtn) gbtn.href = apiUrl('/api/auth/google');
     const res = await fetch(apiUrl('/api/health'));
     const h = await res.json();
     if (!h.google) {
