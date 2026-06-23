@@ -1,5 +1,7 @@
 import { api, getToken, setToken } from './api.js';
 import { MeshManager } from './mesh.js';
+import { attachNearby } from './mesh-nearby.js';
+import * as ringtone from './ringtone.js';
 import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
@@ -368,11 +370,77 @@ function setupMesh() {
     iceServers: state.iceServers,
   });
   state.mesh.addEventListener('status', updateNetIndicator);
-  // Messages arriving directly over a peer link (used when the server is down).
+  // A chat message relayed across the mesh (possibly several hops away). The
+  // payload IS the message object; it may be E2EE ciphertext we then decrypt.
   state.mesh.addEventListener('message', (ev) => {
-    const { data } = ev.detail;
-    if (data.kind === 'message' && data.message) addMessage(data.message);
+    const msg = ev.detail.data;
+    if (msg && msg.chatId) addMessage(msg);
   });
+  // An emergency SOS flooded across the mesh — surface it loudly.
+  state.mesh.addEventListener('sos', (ev) => onMeshSOS(ev.detail));
+  // Native zero-infrastructure transport (BLE / Wi-Fi Direct) when running in
+  // the Capacitor app; a no-op in plain browsers.
+  state.meshNearby = attachNearby(state.mesh, { displayName: state.me.displayName });
+}
+
+// Route a queued message into the mesh, addressed to its recipient(s). The mesh
+// hops it toward them and holds it if no path exists yet.
+function meshDeliver(payload) {
+  const chat = state.chats.get(payload.chatId);
+  if (!chat) return;
+  const msg = optimisticMessage(payload);
+  if (chat.type === 'direct' && chat.otherUser) {
+    state.mesh.sendMessage(chat.otherUser.id, msg);
+  } else if (chat.type === 'group' && Array.isArray(chat.members)) {
+    for (const m of chat.members) if (m.id !== state.me.id) state.mesh.sendMessage(m.id, msg);
+  }
+}
+
+// An SOS flooded across the mesh reached us — surface it as loudly as we can.
+function onMeshSOS({ from, data }) {
+  const name = (data && data.name) || 'Alguém';
+  const text = (data && data.text) || 'Emergência!';
+  const coords = data && data.coords;
+  const banner = el('div', { class: 'sos-banner' },
+    el('div', { class: 'sos-title' }, '🆘 SOS de ' + name),
+    el('div', { class: 'sos-text' }, text));
+  if (coords) {
+    banner.append(el('a', { class: 'sos-map', target: '_blank', rel: 'noopener',
+      href: `https://maps.google.com/?q=${coords.lat},${coords.lon}` }, '📍 Ver localização'));
+  }
+  banner.append(el('button', { class: 'sos-close', onclick: () => banner.remove() }, 'Fechar'));
+  document.body.append(banner);
+  try { if (navigator.vibrate) navigator.vibrate([400, 150, 400, 150, 400]); } catch {}
+  try { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 4000); } catch {}
+  try {
+    if (window.Notification && Notification.permission === 'granted') {
+      new Notification('🆘 SOS de ' + name, { body: text });
+    }
+  } catch {}
+}
+
+// Trigger an emergency SOS: turns on the mesh, grabs a best-effort location and
+// floods every reachable device (and holds it for devices that appear later).
+async function sendSOS() {
+  if (!confirm('Enviar um alerta de EMERGÊNCIA (SOS) para todos os aparelhos próximos na malha?')) return;
+  if (state.mesh && !state.mesh.enabled) {
+    state.mesh.setEnabled(true);
+    for (const [uid, p] of state.presence) if (p.online) state.mesh.connect(uid);
+  }
+  if (state.meshNearby && state.meshNearby.available) { try { await state.meshNearby.start(); } catch {} }
+  const data = { name: state.me.displayName, text: 'Preciso de ajuda! (SOS)' };
+  const coords = await new Promise((res) => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => res({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => res(null), { timeout: 4000, maximumAge: 60000 });
+  });
+  if (coords) data.coords = coords;
+  const count = state.mesh ? state.mesh.neighbors().length : 0;
+  state.mesh.sos(data);
+  toast(count
+    ? `SOS enviado para ${count} aparelho(s) próximos`
+    : 'SOS ativado — será entregue assim que houver aparelhos por perto');
 }
 
 function setupCalls() {
@@ -1210,10 +1278,10 @@ function optimisticMessage(payload) {
 // Try to deliver one queued payload. Updates pending/failed state on the bubble.
 function deliver(payload) {
   if (!state.socket || !state.socket.connected) {
-    // No server link — flood over the mesh if it is up, otherwise stay queued.
-    if (state.mesh && state.mesh.enabled) {
-      state.mesh.broadcast({ kind: 'message', message: optimisticMessage(payload) });
-    }
+    // No server link — route over the mesh if it is up, otherwise stay queued.
+    // The mesh hops the message toward the recipient and holds it if there's no
+    // path yet (store-and-forward), so it lands when a route appears.
+    if (state.mesh && state.mesh.enabled) meshDeliver(payload);
     return;
   }
   state.socket.emit('message:send', payload, (res) => {
@@ -1868,7 +1936,10 @@ function profileModal() {
       autoDownloadRow()),
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
-      meshToggleRow()));
+      meshToggleRow()),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary sos-btn', onclick: () => { backdrop.remove(); sendSOS(); } },
+        '🆘 Emergência (SOS)')));
   const footer = el('div', { class: 'modal-footer' }, save);
   const backdrop = modalShell('Perfil', body, footer);
 }
@@ -1970,14 +2041,19 @@ function meshToggleRow() {
   const label = el('span', {}, state.mesh.enabled ? 'Ativado' : 'Desativado');
   const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
     state.mesh.enabled ? 'Desativar' : 'Ativar');
-  btn.onclick = () => {
+  btn.onclick = async () => {
     state.mesh.setEnabled(!state.mesh.enabled);
     label.textContent = state.mesh.enabled ? 'Ativado' : 'Desativado';
     btn.textContent = state.mesh.enabled ? 'Desativar' : 'Ativar';
     if (state.mesh.enabled) {
       // Try to peer with everyone we currently know is online.
       for (const [uid, p] of state.presence) if (p.online) state.mesh.connect(uid);
-      toast('Modo mesh ativado: mensagens podem trafegar peer-to-peer');
+      // Start the native zero-infrastructure transport, if present.
+      if (state.meshNearby && state.meshNearby.available) { try { await state.meshNearby.start(); } catch {} }
+      const extra = state.meshNearby && state.meshNearby.available ? ' (Bluetooth/Wi-Fi Direct ativo)' : '';
+      toast('Modo mesh ativado: mensagens podem trafegar peer-to-peer' + extra);
+    } else if (state.meshNearby && state.meshNearby.available) {
+      try { await state.meshNearby.stop(); } catch {}
     }
   };
   return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);

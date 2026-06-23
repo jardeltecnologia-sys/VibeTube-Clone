@@ -155,6 +155,25 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .net-indicator.offline { color: var(--danger); }
 .net-indicator.mesh { color: #f0b232; }
 
+/* Emergency SOS */
+.sos-btn { background: var(--danger); font-weight: 700; }
+.sos-banner {
+  position: fixed; left: 50%; top: 16px; transform: translateX(-50%);
+  z-index: 9999; max-width: 92vw; min-width: 280px;
+  background: var(--danger); color: #fff; border-radius: 14px;
+  padding: 14px 16px; box-shadow: 0 10px 40px rgba(0,0,0,.5);
+  display: flex; flex-direction: column; gap: 6px;
+  animation: sos-pulse 1s ease-in-out infinite alternate;
+}
+@keyframes sos-pulse { from { box-shadow: 0 10px 40px rgba(0,0,0,.5); } to { box-shadow: 0 0 0 4px rgba(255,80,80,.6), 0 10px 40px rgba(0,0,0,.5); } }
+.sos-title { font-size: 18px; font-weight: 800; }
+.sos-text { font-size: 14px; opacity: .95; }
+.sos-map { color: #fff; text-decoration: underline; font-weight: 600; }
+.sos-close {
+  align-self: flex-end; margin-top: 4px; background: rgba(0,0,0,.25);
+  color: #fff; border: none; border-radius: 8px; padding: 6px 14px; cursor: pointer;
+}
+
 .search-bar { padding: 8px 12px; background: var(--panel); }
 .search-bar input {
   width: 100%; background: var(--panel-2); border: none;
