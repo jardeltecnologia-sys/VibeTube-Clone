@@ -106,7 +106,13 @@ jobs:
           [ $FOUND -eq 1 ] && echo "✅ OK: plugin Nearby compilado no APK" || echo "❌ plugin não encontrado no dex"
           echo
           echo "## Permissões de Bluetooth/Wi-Fi no APK:"
-          unzip -p $APK AndroidManifest.xml | strings | grep -iE 'BLUETOOTH|NEARBY_WIFI|WIFI_STATE|ACCESS_FINE_LOCATION' | sort -u | sed 's/^/   /' || echo "   (nenhuma encontrada)"
+          AAPT=$(ls $ANDROID_HOME/build-tools/*/aapt 2>/dev/null | head -1 || true)
+          if [ -n "$AAPT" ]; then
+            "$AAPT" dump permissions $APK | grep -iE 'BLUETOOTH|NEARBY_WIFI|WIFI_STATE|FINE_LOCATION' | sort -u | sed 's/^/   /' || echo "   (aapt: nenhuma)"
+          else
+            # Binary AXML stores strings as UTF-16, so use strings -e l (16-bit LE).
+            unzip -p $APK AndroidManifest.xml | strings -e l | grep -iE 'BLUETOOTH|NEARBY_WIFI|WIFI_STATE|FINE_LOCATION' | sort -u | sed 's/^/   /' || echo "   (nenhuma encontrada)"
+          fi
           echo
           echo "## Lib do Nearby (play-services) embarcada?"
           unzip -l $APK | grep -i 'nearby' | head | sed 's/^/   /' || echo "   (não listada por nome)"

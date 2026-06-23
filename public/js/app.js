@@ -61,7 +61,7 @@ function initials(name) {
 }
 
 function avatarBg(node, url, name) {
-  if (url) { node.style.backgroundImage = `url(${url})`; node.textContent = ''; }
+  if (url) { node.style.backgroundImage = `url(${mediaUrl(url)})`; node.textContent = ''; }
   else { node.style.backgroundImage = 'none'; node.textContent = initials(name); }
 }
 
@@ -251,7 +251,12 @@ function connectSocket() {
     : io({ auth: { token: getToken() } });
   state.socket = socket;
 
-  socket.on('connect', () => { updateNetIndicator(); flushOutbox(); });
+  socket.on('connect', () => {
+    updateNetIndicator();
+    flushOutbox();
+    // Internet is back: keep the mesh device registry fresh (best-effort).
+    offline.registerDevice().catch(() => {});
+  });
   socket.on('disconnect', () => updateNetIndicator());
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
@@ -917,7 +922,8 @@ function renderMessages(keepScroll) {
       parts.push(el('div', { class: 'msg-body msg-deleted' }, '🚫 Esta mensagem foi apagada'));
     } else {
       if (m.type === 'image' && m.mediaUrl) {
-        const showImg = () => el('img', { src: m.mediaUrl, loading: 'lazy', onclick: () => window.open(m.mediaUrl, '_blank') });
+        const mu = mediaUrl(m.mediaUrl);
+        const showImg = () => el('img', { src: mu, loading: 'lazy', onclick: () => window.open(mu, '_blank') });
         if (autoDownloadOn()) {
           parts.push(el('div', { class: 'msg-media' }, showImg()));
         } else {
@@ -931,9 +937,9 @@ function renderMessages(keepScroll) {
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
         parts.push(el('div', { class: 'msg-audio' },
-          el('audio', { controls: '', src: m.mediaUrl, preload: 'none' })));
+          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' })));
       } else if (m.type === 'file' && m.mediaUrl) {
-        parts.push(el('a', { class: 'msg-file', href: m.mediaUrl, target: '_blank' },
+        parts.push(el('a', { class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank' },
           el('span', { class: 'file-ic' }, '📄'),
           el('span', {}, m.mediaName || 'Arquivo')));
       } else if (m.type === 'poll' && m.poll) {
@@ -2551,7 +2557,7 @@ function viewStatuses(statuses, user, isMine) {
     content.style.backgroundImage = '';
     if (s.type === 'image' && s.mediaUrl) {
       content.style.background = '#000';
-      content.append(el('img', { class: 'status-img', src: s.mediaUrl }));
+      content.append(el('img', { class: 'status-img', src: mediaUrl(s.mediaUrl) }));
       if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
     } else {
       content.append(el('div', { class: 'status-text' }, s.body || ''));
