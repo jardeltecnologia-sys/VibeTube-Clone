@@ -50,6 +50,10 @@ app.get('/api/ice', (req, res) => {
 if (!fs.existsSync(config.uploadDir)) fs.mkdirSync(config.uploadDir, { recursive: true });
 app.use('/uploads', express.static(config.uploadDir, { maxAge: '7d' }));
 
+// Mesh core (Phase 2 shared library) served to the browser as ES modules, so the
+// web app and the Capacitor WebView use the SAME code as the backend/tests.
+app.use('/mesh-core', express.static(path.join(__dirname, '..', 'packages', 'mesh-core', 'src')));
+
 // Static PWA frontend
 const publicDir = path.join(__dirname, '..', 'public');
 app.use(express.static(publicDir));

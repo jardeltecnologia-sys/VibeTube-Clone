@@ -2,6 +2,7 @@ import { api, getToken, setToken } from './api.js';
 import { MeshManager } from './mesh.js';
 import { attachNearby } from './mesh-nearby.js';
 import * as ringtone from './ringtone.js';
+import * as offline from './offline.js';
 import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
@@ -1938,6 +1939,10 @@ function profileModal() {
       el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
       meshToggleRow()),
     el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openOfflineMode(); } }, '📡 Modo Offline')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Diagnóstico Mesh')),
+    el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary sos-btn', onclick: () => { backdrop.remove(); sendSOS(); } },
         '🆘 Emergência (SOS)')));
   const footer = el('div', { class: 'modal-footer' }, save);
@@ -2057,6 +2062,105 @@ function meshToggleRow() {
     }
   };
   return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+}
+
+// ------------------------------------------------------------------ offline mode UI
+async function openOfflineMode() {
+  const online = Boolean(state.socket && state.socket.connected);
+  const native = offline.nativeAvailable(state.meshNearby);
+  const peers = state.mesh ? state.mesh.status().peers : 0;
+
+  let stateText;
+  if (online) stateText = 'Você está online. O modo offline está de reserva.';
+  else if (state.mesh && state.mesh.enabled && peers > 0) stateText = `Modo Mesh ativo. ${peers} dispositivo(s) próximo(s).`;
+  else if (state.mesh && state.mesh.enabled) stateText = 'Modo Mesh ativo. Procurando pessoas próximas…';
+  else stateText = 'Sem internet e modo mesh desligado.';
+
+  const body = el('div', { class: 'modal-body' },
+    el('div', { class: 'offline-state' }, stateText),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Modo mesh (resiliência em apagão)'),
+      meshToggleRow()),
+    el('p', { class: 'auth-hint' },
+      'No modo offline, o SpeedVox tenta falar diretamente com aparelhos próximos '
+      + '(sem internet), repassando mensagens de aparelho em aparelho até chegar ao destino.'),
+    el('div', { class: 'offline-transport' },
+      el('strong', {}, 'Transporte por perto: '),
+      native ? 'Disponível (Bluetooth / Wi-Fi Direct)' : 'Indisponível neste dispositivo'),
+    native ? '' : el('p', { class: 'auth-hint' },
+      'No navegador, o alcance real por Bluetooth/Wi-Fi Direct depende do app Android '
+      + 'instalado (APK). Aqui você já pode gerar sua identidade e rodar o diagnóstico.'),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Abrir Diagnóstico Mesh')));
+  const backdrop = modalShell('Modo Offline', body);
+}
+
+async function openMeshDiagnostics() {
+  const body = el('div', { class: 'modal-body' }, el('p', { class: 'auth-hint' }, 'Carregando diagnóstico…'));
+  const backdrop = modalShell('Diagnóstico Mesh', body);
+
+  const row = (k, v) => el('div', { class: 'diag-row' },
+    el('span', { class: 'diag-k' }, k), el('span', { class: 'diag-v' }, v));
+
+  let id = null;
+  try { id = await offline.ensureIdentity(state.me.displayName); }
+  catch (e) { body.innerHTML = ''; body.append(el('p', { class: 'auth-hint' },
+    'Este dispositivo não suporta a criptografia necessária (Ed25519/X25519). '
+    + 'Atualize o navegador/WebView do Android. Detalhe: ' + ((e && e.message) || e))); return; }
+
+  const pid = offline.publicIdentity();
+  const meshStatus = state.mesh ? state.mesh.status() : { peers: 0, held: 0, enabled: false };
+  const native = offline.nativeAvailable(state.meshNearby);
+  const be = await offline.meshBackendInfo();
+
+  // Crypto self-test (the key signal for "does my phone work").
+  const test = await offline.cryptoSelfTest();
+  const testNode = el('div', { class: 'diag-test' },
+    el('div', { class: 'diag-test-head' }, test.ok ? '✅ Criptografia OK neste aparelho' : '❌ Falha de criptografia'),
+    ...test.steps.map((s) => el('div', { class: 'diag-step' }, (s.ok ? '✓ ' : '✗ ') + s.name)),
+    test.error ? el('div', { class: 'diag-step' }, 'Erro: ' + test.error) : '');
+
+  body.innerHTML = '';
+  body.append(
+    el('h4', { class: 'diag-h' }, 'Identidade local'),
+    row('deviceId', pid ? pid.deviceId : '—'),
+    row('Chave pública (assinatura)', pid ? pid.signPub.slice(0, 24) + '…' : '—'),
+    row('Chave pública (troca)', pid ? pid.kxPub.slice(0, 24) + '…' : '—'),
+
+    el('h4', { class: 'diag-h' }, 'Criptografia (autoteste)'),
+    testNode,
+
+    el('h4', { class: 'diag-h' }, 'Malha (neste app)'),
+    row('Modo mesh', meshStatus.enabled ? 'Ativado' : 'Desligado'),
+    row('Peers conectados', String(meshStatus.peers)),
+    row('Mensagens retidas (store-and-forward)', String(meshStatus.held || 0)),
+    row('Transporte por perto (BLE/Wi-Fi Direct)', native ? 'Disponível' : 'Indisponível (requer app Android)'),
+
+    el('h4', { class: 'diag-h' }, 'Backend mesh'),
+    row('Status', be.status ? (be.status.enabled ? 'ativo' : 'desativado') : 'inacessível'),
+    row('Sync', be.status ? (be.status.syncEnabled ? 'ativo' : 'desativado') : '—'),
+    row('TTL máx. / lote máx.', be.config ? `${be.config.maxTTL} / ${be.config.maxBatchSize}` : '—'),
+
+    el('div', { class: 'diag-actions' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => { backdrop.remove(); openMeshDiagnostics(); } }, '🔄 Rodar de novo'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          try { await navigator.clipboard.writeText(JSON.stringify(pid)); toast('Identidade pública copiada'); }
+          catch { toast('Não foi possível copiar'); }
+        } }, '📋 Copiar identidade pública'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)',
+        onclick: async () => {
+          const r = await offline.registerDevice().catch((e) => ({ error: e.message }));
+          toast(r && r.ok ? 'Dispositivo registrado no servidor' : ('Falha: ' + ((r && r.error) || 'erro')));
+        } }, '☁️ Registrar no servidor'),
+      el('button', { class: 'btn-primary sos-btn',
+        onclick: async () => {
+          if (!confirm('Resetar a identidade offline? Isto gera novas chaves e um novo deviceId.')) return;
+          await offline.resetIdentity(state.me.displayName);
+          backdrop.remove(); openMeshDiagnostics();
+        } }, '🗑️ Resetar identidade')));
 }
 
 // Dropdown to choose the disappearing-messages timer for a chat.
@@ -2507,6 +2611,11 @@ async function startApp(user) {
 
   connectSocket();
   setupMesh();
+  // Generate/persist the offline cryptographic identity and register it with the
+  // backend (best-effort). Failures never block the app (e.g. old WebView).
+  offline.ensureIdentity(state.me.displayName)
+    .then(() => offline.registerDevice().catch(() => {}))
+    .catch((e) => console.warn('[offline] identidade indisponível:', e && e.message));
   setupCalls();
   setupComposer();
   await loadChats();
