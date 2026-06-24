@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v34';
+const CACHE = 'speedvox-shell-v35';
 const SHELL = [
   '/',
   '/index.html',
@@ -36,6 +36,7 @@ const SHELL = [
   '/mesh-core/forward.js',
   '/mesh-core/base64.js',
   '/mesh-core/chunk.js',
+  '/mesh-core/callsignal.js',
 ];
 
 self.addEventListener('install', (event) => {

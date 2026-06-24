@@ -491,7 +491,18 @@ async function sendSOS() {
 }
 
 function setupCalls() {
-  state.calls = new CallManager({ socket: state.socket, selfId: state.me.id, iceServers: state.iceServers });
+  state.calls = new CallManager({
+    socket: state.socket,
+    selfId: state.me.id,
+    iceServers: state.iceServers,
+    mesh: state.mesh, // lets a call be signaled over the mesh when the server is down
+    self: { id: state.me.id, displayName: state.me.displayName, avatarUrl: state.me.avatarUrl },
+  });
+  // Deliver call signals that arrived over the mesh (blackout calling) to the
+  // CallManager, exactly as if they'd come from the Socket.IO server.
+  if (state.mesh) {
+    state.mesh.addEventListener('callsignal', (ev) => state.calls.onMeshSignal(ev.detail));
+  }
   state.groupCalls = new GroupCallManager({
     socket: state.socket,
     selfId: state.me.id,
