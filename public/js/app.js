@@ -269,6 +269,13 @@ function connectSocket() {
     } else if (message.senderId !== state.me.id) {
       socket.emit('message:delivered', { messageId: message.id, chatId: message.chatId });
     }
+    // Audible nudge when a message lands while the app is open but the chat
+    // isn't focused (or the window is in the background). When the app is fully
+    // closed, the OS notification sound takes over via Web Push instead.
+    if (message.senderId !== state.me.id &&
+        (message.chatId !== state.activeChatId || document.hidden)) {
+      ringtone.notify();
+    }
   });
 
   socket.on('chat:update', (summary) => {
@@ -1711,9 +1718,14 @@ function newChatModal() {
 // ------------------------------------------------------------------ contacts (agenda)
 async function contactsModal() {
   const list = el('div', {});
-  const newBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px',
+  const newBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:10px',
     onclick: () => contactFormModal(null, null, refresh) }, '＋ Novo contato');
-  const body = el('div', { class: 'modal-body' }, newBtn, list);
+  // Import straight from the phone's address book (Gmail-synced contacts too).
+  // The SpeedVox app needs no phone number/SIM, so this just makes finding the
+  // people you already know much faster.
+  const agendaBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px;background:var(--panel-3)',
+    onclick: () => importFromAgenda(refresh) }, '📇 Adicionar pela agenda do celular');
+  const body = el('div', { class: 'modal-body' }, newBtn, agendaBtn, list);
   const backdrop = modalShell('Contatos', body);
 
   async function refresh() {
@@ -1762,6 +1774,75 @@ async function contactsModal() {
     }
   }
   refresh();
+}
+
+// Import contacts from the phone's address book using the Contact Picker API
+// (Android Chrome / installed PWA) or the native bridge. Picked e-mails are
+// matched against SpeedVox users so you can start chatting in one tap; the rest
+// can still be saved as plain contacts. The app uses no phone numbers, so the
+// match is by e-mail (works great with Gmail-synced agendas).
+async function importFromAgenda(onSaved) {
+  const picker = navigator.contacts && navigator.contacts.select;
+  if (!picker) {
+    toast('A agenda do celular abre no Android (Chrome) ou no app instalado. Em outros aparelhos, adicione pelo e-mail em "Novo contato".');
+    return;
+  }
+  let picked;
+  try {
+    picked = await navigator.contacts.select(['name', 'email', 'tel'], { multiple: true });
+  } catch { return; } // cancelado ou permissão negada
+  if (!picked || !picked.length) return;
+
+  const entries = picked.map((c) => ({
+    name: (c.name && c.name[0]) || (c.email && c.email[0]) || 'Contato',
+    email: (c.email && c.email[0]) || '',
+    phone: (c.tel && c.tel[0]) || '',
+  }));
+  const emails = entries.map((e) => e.email).filter(Boolean);
+  const matched = new Map(); // email(lower) -> user
+  try {
+    const { users } = await api.matchUsers(emails);
+    for (const u of users) if (u.email) matched.set(u.email.toLowerCase(), u);
+  } catch { /* ignore: still let the user save plain contacts */ }
+
+  const list = el('div', {});
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint' }, `${entries.length} contato(s) da agenda. Quem já usa o SpeedVox aparece com ✅.`),
+    list);
+  const backdrop = modalShell('Adicionar pela agenda', body);
+
+  for (const e of entries) {
+    const user = e.email ? matched.get(e.email.toLowerCase()) : null;
+    const sub = [e.email, e.phone].filter(Boolean).join(' · ') || 'Sem e-mail';
+    const btn = el('button', { class: 'btn-primary', style: 'padding:8px 14px;margin:0' },
+      user ? 'Adicionar e conversar' : 'Salvar contato');
+    btn.onclick = async () => {
+      btn.disabled = true;
+      try {
+        const payload = { displayName: e.name, email: e.email, phone: e.phone };
+        if (user) payload.userId = user.id;
+        await api.addContact(payload).catch((err) => {
+          if (!/já está salvo/i.test(err.message || '')) throw err; // ok if duplicate
+        });
+        if (user) {
+          const { chat } = await api.openDirect(user.id);
+          state.chats.set(chat.id, chat);
+          state.socket.emit('chat:join', { chatId: chat.id });
+          backdrop.remove();
+          if (onSaved) onSaved();
+          await openChat(chat.id);
+        } else {
+          btn.textContent = 'Salvo ✓';
+          if (onSaved) onSaved();
+        }
+      } catch (err) { btn.disabled = false; toast(err.message || 'Falha ao salvar'); }
+    };
+    list.append(el('div', { class: 'user-result' },
+      el('div', { class: 'user-result-body' },
+        el('div', { class: 'user-result-name' }, e.name + (user ? ' ✅' : '')),
+        el('div', { class: 'user-result-sub' }, sub)),
+      btn));
+  }
 }
 
 // Add or edit a contact. `existing` = contact to edit; `prefill` = initial values
@@ -1906,6 +1987,82 @@ async function openUserByUsername(username) {
     state.socket.emit('chat:join', { chatId: chat.id });
     await openChat(chat.id);
   } catch { toast('Não foi possível abrir a conversa'); }
+}
+
+// Notification + Mesh settings — opened from the ⚙️ gear in the sidebar. This
+// is where the call ring volume/vibration live (the user asked for a louder,
+// adjustable ring) and where the Mesh network is made explicit and easy to find.
+function settingsModal() {
+  // --- ring mode selector ---
+  const ringSelect = el('select', { class: 'select-input' });
+  for (const [v, label] of [
+    ['loud', '🔊 Alto e chamativo'],
+    ['normal', '🔉 Normal'],
+    ['vibrate', '📳 Só vibrar'],
+    ['silent', '🔕 Silencioso'],
+  ]) {
+    const o = el('option', { value: v }, label);
+    if (v === ringtone.ringMode()) o.setAttribute('selected', '');
+    ringSelect.append(o);
+  }
+  ringSelect.onchange = () => { ringtone.setRingMode(ringSelect.value); };
+
+  // --- on-by-default boolean toggle helper (stores '1'/'0'; absent == on) ---
+  const boolRow = (key, onText, offText) => {
+    const isOn = () => localStorage.getItem(key) !== '0';
+    const label = el('span', {}, isOn() ? onText : offText);
+    const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
+      isOn() ? 'Desativar' : 'Ativar');
+    btn.onclick = () => {
+      const next = !isOn();
+      localStorage.setItem(key, next ? '1' : '0');
+      label.textContent = next ? onText : offText;
+      btn.textContent = next ? 'Desativar' : 'Ativar';
+    };
+    return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+  };
+
+  const testBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3)' }, '🔔 Testar toque');
+  testBtn.onclick = () => { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 3500); };
+
+  // --- mesh status line + toggle (make the mesh feature explicit) ---
+  const peers = state.mesh ? state.mesh.status().peers : 0;
+  const meshState = !state.mesh ? 'indisponível neste aparelho'
+    : state.mesh.enabled ? (peers > 0 ? `ativo · ${peers} aparelho(s) por perto` : 'ativo · procurando aparelhos por perto…')
+    : 'desativado';
+
+  const body = el('div', { class: 'modal-body' },
+    el('h3', { class: 'settings-section' }, '🔔 Notificações e chamadas'),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Toque de chamada'), ringSelect),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Vibrar ao receber chamada'),
+      boolRow('speedvox_vibrate', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Som ao chegar mensagem (app aberto)'),
+      boolRow('speedvox_msg_sound', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' }, testBtn),
+    el('p', { class: 'auth-hint' },
+      'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
+
+    el('h3', { class: 'settings-section' }, '📡 Rede Mesh (funciona sem internet)'),
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'O SpeedVox conversa direto entre aparelhos por perto (Bluetooth/Wi-Fi Direct), mesmo sem internet — é o que torna ele superior ao WhatsApp e ao Telegram em apagões e emergências.'),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'width:100%;font-size:16px;padding:14px',
+        onclick: async () => { await connectMeshNow(); backdrop.remove(); } },
+        '📡 Conectar à Rede Mesh agora')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, `Estado: ${meshState}`),
+      state.mesh ? meshToggleRow() : el('span', {}, '—')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openOfflineMode(); } }, '📡 Modo Offline / aparelhos por perto')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Diagnóstico da Rede Mesh')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary sos-btn', onclick: () => { backdrop.remove(); sendSOS(); } }, '🆘 Emergência (SOS)')));
+
+  const backdrop = modalShell('Configurações', body);
 }
 
 function profileModal() {
@@ -2072,6 +2229,20 @@ function meshToggleRow() {
     }
   };
   return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+}
+
+// One-tap "join the mesh": turns on mesh, starts the zero-infrastructure radio
+// (Bluetooth/Wi-Fi Direct) and links up with everyone currently reachable. This
+// is the button everyone in a group presses in a blackout so they can keep
+// talking to each other with no internet and no cell towers.
+async function connectMeshNow() {
+  if (!state.mesh) { toast('Rede mesh indisponível neste aparelho'); return; }
+  if (!state.mesh.enabled) state.mesh.setEnabled(true);
+  for (const [uid, p] of state.presence) if (p.online) state.mesh.connect(uid);
+  if (state.meshNearby && state.meshNearby.available) { try { await state.meshNearby.start(); } catch {} }
+  updateNetIndicator();
+  const extra = state.meshNearby && state.meshNearby.available ? ' Bluetooth/Wi-Fi Direct ativo.' : '';
+  toast('Conectado à Rede Mesh.' + extra + ' Mensagens trafegam entre aparelhos próximos, sem internet.');
 }
 
 // ------------------------------------------------------------------ offline mode UI
@@ -2700,7 +2871,12 @@ async function startApp(user) {
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;
+  $('#settings-btn').onclick = settingsModal;
   $('#status-btn').onclick = openStatusPanel;
+  // The connection dot doubles as a shortcut to the Mesh/offline panel, so the
+  // mesh feature is discoverable straight from the main screen.
+  const netDot = $('#net-indicator');
+  if (netDot) { netDot.style.cursor = 'pointer'; netDot.onclick = openOfflineMode; }
 
   setupPush();
   refreshStatusIndicator();

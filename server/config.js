@@ -85,9 +85,10 @@ const config = {
   registerMaxPerIp: parseInt(process.env.REGISTER_MAX_PER_IP || '20', 10),
   // Upload guard: max file size and a denylist of dangerous extensions.
   uploadMaxBytes: parseInt(process.env.UPLOAD_MAX_MB || '32', 10) * 1024 * 1024,
-  // Group size cap. Text messaging scales to large groups; group *calls* are
-  // full-mesh and only practical for small groups regardless of this number.
-  groupMaxMembers: parseInt(process.env.GROUP_MAX_MEMBERS || '1024', 10),
+  // Group size cap. Practically unlimited (blackout/community scenario): the
+  // number is only an anti-abuse guard. Text messaging scales to huge groups;
+  // group *calls* are full-mesh and only practical for small groups regardless.
+  groupMaxMembers: parseInt(process.env.GROUP_MAX_MEMBERS || '100000', 10),
 
   // --- VibeTube Mesh / SpeedVox Offline Mode (additive, feature-flagged) ---
   // The offline mesh is an additional layer; these flags never change existing

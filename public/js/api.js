@@ -42,6 +42,7 @@ export const api = {
   me: () => request('GET', '/auth/me'),
 
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
+  matchUsers: (emails) => request('POST', '/users/match', { emails }),
   getUser: (id) => request('GET', `/users/${id}`),
   updateProfile: (d) => request('PATCH', '/users/me', d),
   blockUser: (id) => request('POST', `/users/${id}/block`),
