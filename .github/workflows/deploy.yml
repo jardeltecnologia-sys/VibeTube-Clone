@@ -1,0 +1,66 @@
+name: Deploy to production (Hostinger)
+
+# Ao mesclar na `main` (ou disparo manual), conecta na VPS por SSH e roda o
+# deploy/finish-deploy.sh. As credenciais ficam em GitHub Secrets (criptografados
+# — nunca aparecem nos logs). Configure-as com deploy/setup-github-deploy.ps1.
+#
+# Secrets usados:
+#   DEPLOY_SSH_KEY     -> chave PRIVADA de deploy (autorizada na Oracle e no Hostinger)
+#   DEPLOY_HOST        -> IP/host do Hostinger (destino do app)
+#   DEPLOY_HOST_USER   -> usuário no Hostinger (ex.: root ou um usuário de deploy)
+#   DEPLOY_PROXY_HOST  -> IP/host da Oracle (ponte/jump)   [opcional]
+#   DEPLOY_PROXY_USER  -> usuário na Oracle (ex.: ubuntu)  [opcional]
+#
+# Se os secrets de PROXY não existirem, conecta DIRETO no Hostinger.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar se o deploy está configurado
+        id: cfg
+        run: |
+          if [ -z "${{ secrets.DEPLOY_HOST }}" ] || [ -z "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "ℹ️  Deploy automático ainda não configurado (faltam secrets). Pulando com sucesso."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Preparar chave SSH
+        if: steps.cfg.outputs.configured == 'true'
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+      - name: Rodar deploy na VPS
+        if: steps.cfg.outputs.configured == 'true'
+        env:
+          HOST: ${{ secrets.DEPLOY_HOST }}
+          HOST_USER: ${{ secrets.DEPLOY_HOST_USER }}
+          PROXY_HOST: ${{ secrets.DEPLOY_PROXY_HOST }}
+          PROXY_USER: ${{ secrets.DEPLOY_PROXY_USER }}
+        run: |
+          set -e
+          KEY="$HOME/.ssh/deploy_key"
+          BASE_OPTS="-i $KEY -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -o ConnectTimeout=30"
+          REMOTE='cd /opt/speedvox && git fetch origin main && git reset --hard origin/main && bash deploy/finish-deploy.sh'
+          if [ -n "$PROXY_HOST" ]; then
+            echo "Conectando via ponte $PROXY_USER@$PROXY_HOST -> $HOST_USER@$HOST"
+            ssh $BASE_OPTS \
+              -o ProxyCommand="ssh $BASE_OPTS -W %h:%p ${PROXY_USER:-ubuntu}@$PROXY_HOST" \
+              "${HOST_USER:-root}@$HOST" "$REMOTE"
+          else
+            echo "Conectando direto em $HOST_USER@$HOST"
+            ssh $BASE_OPTS "${HOST_USER:-root}@$HOST" "$REMOTE"
+          fi
