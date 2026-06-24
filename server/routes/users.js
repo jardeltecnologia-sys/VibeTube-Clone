@@ -71,6 +71,25 @@ router.get('/search', (req, res) => {
   res.json({ users: rows.map((u) => publicUserFor(u, req.user.id)) });
 });
 
+// Match a batch of address-book entries against SpeedVox users, so the app can
+// import contacts straight from the phone's agenda (Contact Picker / native).
+// The app has no phone numbers for users, so matching is by e-mail; unmatched
+// entries can still be saved as plain contacts on the client. Capped per call.
+router.post('/match', (req, res) => {
+  const emails = Array.isArray(req.body && req.body.emails) ? req.body.emails : [];
+  const norm = [...new Set(
+    emails.map((e) => String(e || '').trim().toLowerCase()).filter((e) => e && e.length <= 254)
+  )].slice(0, 500);
+  if (!norm.length) return res.json({ users: [] });
+  const placeholders = norm.map(() => '?').join(',');
+  const rows = db
+    .prepare(`SELECT * FROM users WHERE id != ? AND lower(email) IN (${placeholders})`)
+    .all(req.user.id, ...norm);
+  // Echo back the matched e-mail so the client can map it to the picked contact
+  // (the client already supplied it, so this leaks nothing new).
+  res.json({ users: rows.map((u) => ({ ...publicUserFor(u, req.user.id), email: u.email })) });
+});
+
 function privacyOf(u) {
   return {
     lastSeen: u.privacy_last_seen || 'everyone',
