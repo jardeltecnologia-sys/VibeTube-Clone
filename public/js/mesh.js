@@ -20,6 +20,7 @@
 // offline Bluetooth peer relay for each other transparently.
 
 import { splitMedia, MediaReassembler } from '/mesh-core/chunk.js';
+import { CALL_SIGNAL_KIND } from '/mesh-core/callsignal.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -118,6 +119,14 @@ export class MeshManager extends EventTarget {
     return mediaId;
   }
 
+  // Send a 1:1 call signal (invite / accept / sdp / ice / end) toward a user over
+  // the mesh. Used as a fallback so calls can be negotiated with NO server — the
+  // signal floods and store-and-forwards like any mesh message.
+  sendCallSignal(toUserId, signal) {
+    this.sendMessage(toUserId, signal, CALL_SIGNAL_KIND);
+    return signal;
+  }
+
   // Flood an emergency SOS to EVERYONE reachable (broadcast). `data` typically
   // carries { name, text, coords }. SOS is delivered locally on every node and
   // relayed onward so it reaches the whole connected component.
@@ -175,6 +184,9 @@ export class MeshManager extends EventTarget {
   _deliverLocal(env) {
     if (env.kind === 'sos') {
       this.dispatchEvent(new CustomEvent('sos', { detail: { from: env.origin, data: env.data, ts: env.ts } }));
+    } else if (env.kind === CALL_SIGNAL_KIND) {
+      // A 1:1 call signal arrived over the mesh (server-free calling).
+      this.dispatchEvent(new CustomEvent('callsignal', { detail: { from: env.origin, signal: env.data } }));
     } else if (env.kind === 'media') {
       // One chunk of a media item. Reassemble (keyed by sender); emit only when
       // the whole thing has arrived.

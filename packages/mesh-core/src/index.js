@@ -54,3 +54,9 @@ export {
   splitMedia,
   MediaReassembler,
 } from './chunk.js';
+
+export {
+  CALL_SIGNAL_KIND,
+  buildCallSignal,
+  routeCallSignal,
+} from './callsignal.js';

@@ -4,6 +4,7 @@
 
 import { mediaConstraints, tuneAudioSdp, capVideoBitrate } from './webrtc-quality.js';
 import * as ringtone from './ringtone.js';
+import { buildCallSignal, routeCallSignal } from '/mesh-core/callsignal.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -15,9 +16,13 @@ const GRACE_MS = 20000;
 const MAX_ICE_RESTARTS = 3;
 
 export class CallManager {
-  constructor({ socket, selfId, iceServers }) {
+  constructor({ socket, selfId, iceServers, mesh = null, self = null }) {
     this.socket = socket;
     this.selfId = selfId;
+    // Optional mesh transport: lets calls be signaled with NO server (blackout),
+    // and `self` is our public profile so the callee can show who's calling.
+    this.mesh = mesh;
+    this.self = self;
     this.iceServers = iceServers && iceServers.length ? iceServers : DEFAULT_ICE;
     this.pc = null;
     this.localStream = null;
@@ -47,6 +52,36 @@ export class CallManager {
     s.on('call:ended', (d) => this._onEnded(d));
   }
 
+  // Send a call signal. When the server is reachable, behaves EXACTLY like
+  // before (socket.emit, same payload). When it isn't, the same signal goes over
+  // the mesh so the call can still be set up peer-to-peer in a blackout.
+  // `meshType` is the compact mesh signal type (invite/accept/reject/sdp/ice/end).
+  _send(socketEvent, meshType, payload, meshExtra = {}) {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit(socketEvent, payload);
+      return;
+    }
+    if (this.mesh && this.mesh.enabled && this.peer) {
+      const sig = buildCallSignal(meshType, {
+        callId: this.callId,
+        media: payload.media,
+        sdp: payload.sdp,
+        candidate: payload.candidate,
+        from: meshExtra.from,
+      });
+      this.mesh.sendCallSignal(this.peer.id, sig);
+    }
+  }
+
+  // A call signal arrived over the mesh (server-free path). Route it to the same
+  // handler the Socket.IO event would have hit.
+  onMeshSignal({ from, signal }) {
+    const routed = routeCallSignal(signal, from);
+    if (!routed) return;
+    const fn = this[routed.handler];
+    if (typeof fn === 'function') fn.call(this, routed.payload);
+  }
+
   async _ensureMedia() {
     if (this.localStream) return this.localStream;
     this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
@@ -64,7 +99,7 @@ export class CallManager {
 
     pc.onicecandidate = (e) => {
       if (e.candidate) {
-        this.socket.emit('call:ice', { to: this.peer.id, callId: this.callId, candidate: e.candidate });
+        this._send('call:ice', 'ice', { to: this.peer.id, callId: this.callId, candidate: e.candidate });
       }
     };
 
@@ -186,7 +221,7 @@ export class CallManager {
         const offer = await pc.createOffer({ iceRestart: true });
         offer.sdp = tuneAudioSdp(offer.sdp);
         await pc.setLocalDescription(offer);
-        this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
+        this._send('call:sdp', 'sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
       } catch { /* grace timer will handle cleanup */ }
     }
     // Callee: caller will detect the failure too and re-offer via its own _onFailed.
@@ -210,7 +245,7 @@ export class CallManager {
     this._showOverlay('outgoing');
     this._setStatus('Chamando…');
     ringtone.startOutgoing();
-    this.socket.emit('call:invite', { to: peer.id, callId: this.callId, media });
+    this._send('call:invite', 'invite', { to: peer.id, callId: this.callId, media }, { from: this.self });
   }
 
   async _onAccepted({ callId }) {
@@ -222,7 +257,7 @@ export class CallManager {
       offer.sdp = tuneAudioSdp(offer.sdp);
       await pc.setLocalDescription(offer);
       if (this.media === 'video') capVideoBitrate(pc);
-      this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
+      this._send('call:sdp', 'sdp', { to: this.peer.id, callId: this.callId, sdp: pc.localDescription });
       this._setStatus('Conectando…');
     } catch {
       this._toast('Erro ao iniciar chamada');
@@ -245,7 +280,12 @@ export class CallManager {
   // ---------------------------------------------------------------- incoming
   _onIncoming({ from, callId, media }) {
     if (this.callId) {
-      this.socket.emit('call:reject', { to: from.id, callId });
+      // Busy: reject straight away (this.peer isn't ours here, so signal `from`).
+      if (this.socket && this.socket.connected) {
+        this.socket.emit('call:reject', { to: from.id, callId });
+      } else if (this.mesh && this.mesh.enabled) {
+        this.mesh.sendCallSignal(from.id, buildCallSignal('reject', { callId }));
+      }
       return;
     }
     this.peer = from;
@@ -267,13 +307,13 @@ export class CallManager {
       return;
     }
     this._createPeer();
-    this.socket.emit('call:accept', { to: this.peer.id, callId: this.callId });
+    this._send('call:accept', 'accept', { to: this.peer.id, callId: this.callId });
     this._showOverlay('active');
     this._setStatus('Conectando…');
   }
 
   _reject() {
-    this.socket.emit('call:reject', { to: this.peer.id, callId: this.callId });
+    this._send('call:reject', 'reject', { to: this.peer.id, callId: this.callId });
     this._reset();
   }
 
@@ -290,7 +330,7 @@ export class CallManager {
         answer.sdp = tuneAudioSdp(answer.sdp);
         await this.pc.setLocalDescription(answer);
         if (this.media === 'video') capVideoBitrate(this.pc);
-        this.socket.emit('call:sdp', { to: this.peer.id, callId: this.callId, sdp: this.pc.localDescription });
+        this._send('call:sdp', 'sdp', { to: this.peer.id, callId: this.callId, sdp: this.pc.localDescription });
         this._showOverlay('active');
         this._setStatus('Conectando…');
       }
@@ -313,7 +353,7 @@ export class CallManager {
   // ---------------------------------------------------------------- teardown
   hangup(remote = false) {
     if (!remote && this.callId && this.peer) {
-      this.socket.emit('call:end', { to: this.peer.id, callId: this.callId });
+      this._send('call:end', 'end', { to: this.peer.id, callId: this.callId });
     }
     this._reset();
   }
