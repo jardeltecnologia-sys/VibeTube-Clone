@@ -64,6 +64,13 @@ function listForUser(userId) {
   return db.prepare('SELECT * FROM push_subscriptions WHERE user_id = ?').all(userId);
 }
 
+// True if the user has at least one device that can receive a push (app closed
+// but reachable). Used to decide whether an incoming call can ring via push.
+function hasSubscription(userId) {
+  const row = db.prepare('SELECT 1 FROM push_subscriptions WHERE user_id = ? LIMIT 1').get(userId);
+  return Boolean(row);
+}
+
 // Send a payload to every device of a user. Prunes expired/invalid subscriptions.
 async function sendToUser(userId, payload) {
   if (!isEnabled()) return 0;
@@ -98,6 +105,6 @@ function recipientsFor(chatId, senderId, isOnline) {
 
 module.exports = {
   initVapid, isEnabled, getPublicKey,
-  saveSubscription, removeSubscription, listForUser,
+  saveSubscription, removeSubscription, listForUser, hasSubscription,
   sendToUser, recipientsFor,
 };

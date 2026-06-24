@@ -157,6 +157,24 @@ function setup(httpServer) {
     for (const uid of targets) push.sendToUser(uid, payload).catch(() => {});
   }
 
+  // Fire-and-forget Web Push for an INCOMING CALL (callee's app is closed). The
+  // notification wakes the device; when the app opens and reconnects, the server
+  // delivers the still-ringing call (see the connection handler).
+  function notifyIncomingCall(toUserId, caller, callId, media, chatId) {
+    if (!push.isEnabled()) return;
+    push.sendToUser(toUserId, {
+      type: 'call',
+      title: `📞 ${caller.display_name || 'Chamada'}`,
+      body: media === 'video' ? 'Chamada de vídeo recebida' : 'Chamada de voz recebida',
+      callId,
+      media,
+      chatId: chatId || null,
+      tag: `call-${callId}`,
+      renotify: true,
+      requireInteraction: true,
+    }).catch(() => {});
+  }
+
   // Deliver scheduled messages whose time has come.
   function deliverScheduled() {
     const due = db
@@ -215,6 +233,24 @@ function setup(httpServer) {
     }
 
     if (wasOffline) broadcastPresence(userId, 'online');
+
+    // WhatsApp-style: if someone called while this user's app was closed, the
+    // call is still ringing on the server — deliver it so the app rings as soon
+    // as it opens (e.g. from tapping the call push notification). Small delay so
+    // an app that just booted has time to attach its call handlers.
+    setTimeout(() => {
+      if (!isOnline(userId)) return;
+      for (const [cid, call] of activeCalls) {
+        if (call.calleeId === userId && !call.answeredAt && !call.logged) {
+          const caller = db.prepare('SELECT * FROM users WHERE id = ?').get(call.callerId);
+          if (caller) {
+            io.to(`user:${userId}`).emit('call:incoming', {
+              from: publicUser(caller), callId: cid, media: call.media, chatId: call.chatId || null,
+            });
+          }
+        }
+      }
+    }, 800);
 
     // Client asks which of a list of users are currently online.
     socket.on('presence:query', (userIds, cb) => {
@@ -471,13 +507,18 @@ function setup(httpServer) {
         socket.emit('call:unavailable', { callId, reason: 'blocked' });
         return;
       }
-      if (!isOnline(to)) {
-        // Recipient offline: log a missed call straight away and push them.
+
+      const calleeOnline = isOnline(to);
+      // App closed AND no way to wake them (no push subscription): tell the
+      // caller immediately instead of ringing into the void.
+      if (!calleeOnline && !push.hasSubscription(to)) {
         activeCalls.set(callId, { callerId: userId, calleeId: to, media: callMedia, startedAt: now() });
         socket.emit('call:unavailable', { callId, reason: 'offline' });
         logCall(callId, 'missed');
         return;
       }
+
+      // Keep the call ringing for the whole window; if unanswered, mark missed.
       const ringTimer = setTimeout(() => {
         const call = activeCalls.get(callId);
         if (call && !call.answeredAt) {
@@ -486,13 +527,21 @@ function setup(httpServer) {
           logCall(callId, 'missed');
         }
       }, config.callRingMs);
-      activeCalls.set(callId, { callerId: userId, calleeId: to, media: callMedia, startedAt: now(), ringTimer });
-      io.to(`user:${to}`).emit('call:incoming', {
-        from: publicUser(socket.user),
-        callId,
-        media: callMedia,
-        chatId,
+      activeCalls.set(callId, {
+        callerId: userId, calleeId: to, media: callMedia, chatId: chatId || null,
+        startedAt: now(), ringTimer,
       });
+
+      if (calleeOnline) {
+        // App open on at least one device: ring it now.
+        io.to(`user:${to}`).emit('call:incoming', {
+          from: publicUser(socket.user), callId, media: callMedia, chatId,
+        });
+      } else {
+        // App closed but reachable: wake the device via push. When it opens and
+        // reconnects, the connection handler delivers this still-ringing call.
+        notifyIncomingCall(to, socket.user, callId, callMedia, chatId);
+      }
     });
     socket.on('call:accept', ({ to, callId }) => {
       const call = activeCalls.get(callId);
