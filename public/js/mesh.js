@@ -19,6 +19,8 @@
 // has, regardless of which transport opened it, so an online WebRTC peer and an
 // offline Bluetooth peer relay for each other transparently.
 
+import { splitMedia, MediaReassembler } from '/mesh-core/chunk.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 // Protocol tunables.
@@ -52,6 +54,8 @@ export class MeshManager extends EventTarget {
     this.outbox = new Map();
     // Pending delivery confirmations we originated: messageId -> { resolve, timer }.
     this.pendingAcks = new Map();
+    // Reassembles chunked media (voice notes, photos) arriving over the mesh.
+    this.media = new MediaReassembler();
 
     this.enabled = false;
   }
@@ -101,6 +105,17 @@ export class MeshManager extends EventTarget {
     const env = this._makeEnvelope({ to: toUserId, kind, data });
     this._originate(env);
     return env.id;
+  }
+
+  // Send a media item (voice note, photo, file) toward a user across the mesh.
+  // The blob is split into chunks that each travel as a normal mesh message
+  // (flooded, ACKed, store-and-forwarded) and are reassembled on the far side.
+  // `meta` = { chatId, type, mime, name, b64 }. Returns the media id.
+  sendMedia(toUserId, meta) {
+    const mediaId = randomId();
+    const chunks = splitMedia({ mediaId, type: meta.type, mime: meta.mime, name: meta.name, b64: meta.b64 });
+    for (const c of chunks) this.sendMessage(toUserId, { ...c, chatId: meta.chatId || null }, 'media');
+    return mediaId;
   }
 
   // Flood an emergency SOS to EVERYONE reachable (broadcast). `data` typically
@@ -160,6 +175,15 @@ export class MeshManager extends EventTarget {
   _deliverLocal(env) {
     if (env.kind === 'sos') {
       this.dispatchEvent(new CustomEvent('sos', { detail: { from: env.origin, data: env.data, ts: env.ts } }));
+    } else if (env.kind === 'media') {
+      // One chunk of a media item. Reassemble (keyed by sender); emit only when
+      // the whole thing has arrived.
+      const done = this.media.add(env.data, env.origin);
+      if (done) {
+        this.dispatchEvent(new CustomEvent('media', {
+          detail: { from: env.origin, chatId: env.data.chatId || null, ts: env.ts, ...done },
+        }));
+      }
     } else {
       this.dispatchEvent(new CustomEvent('message', { detail: { from: env.origin, data: env.data, ts: env.ts } }));
     }

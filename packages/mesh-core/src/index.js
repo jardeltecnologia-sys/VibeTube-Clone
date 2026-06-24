@@ -47,3 +47,10 @@ export {
   utf8ToBytes,
   bytesToUtf8,
 } from './base64.js';
+
+export {
+  DEFAULT_CHUNK_B64,
+  MAX_MEDIA_B64,
+  splitMedia,
+  MediaReassembler,
+} from './chunk.js';
