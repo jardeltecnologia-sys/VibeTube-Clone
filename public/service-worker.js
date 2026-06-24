@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v30';
+const CACHE = 'speedvox-shell-v31';
 const SHELL = [
   '/',
   '/index.html',
@@ -53,15 +53,23 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+  const isCall = data.type === 'call';
   const title = data.title || 'SpeedVox';
   event.waitUntil(
     self.registration.showNotification(title, {
-      body: data.body || 'Nova mensagem',
+      body: data.body || (isCall ? 'Chamada recebida' : 'Nova mensagem'),
       tag: data.tag || undefined,
-      data: { chatId: data.chatId || null },
+      data: {
+        chatId: data.chatId || null,
+        callId: data.callId || null,
+        type: data.type || 'message',
+      },
       icon: '/icons/icon.svg',
       badge: '/icons/icon.svg',
       renotify: Boolean(data.tag),
+      // Calls: keep the notification up until tapped, and vibrate like a ring.
+      requireInteraction: isCall,
+      vibrate: isCall ? [500, 300, 500, 300, 500, 300, 500] : undefined,
     })
   );
 });
