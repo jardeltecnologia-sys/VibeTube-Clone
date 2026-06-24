@@ -40,8 +40,16 @@ jobs:
         if: steps.cfg.outputs.configured == 'true'
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          # Remove \r (CRLF) — chaves copiadas no Windows vêm com fim de linha
+          # CRLF, que corrompe a chave e causa "Permission denied (publickey)".
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" | tr -d '\r' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
+          # Diagnóstico: a chave carrega? (detecta corrupção/CRLF/passphrase)
+          if ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null 2>&1; then
+            echo "Chave de deploy: OK (carrega, sem passphrase)."
+          else
+            echo "::warning::A chave de deploy NÃO carrega — provavelmente corrompida (CRLF) ou protegida por passphrase."
+          fi
 
       - name: Rodar deploy na VPS
         if: steps.cfg.outputs.configured == 'true'
