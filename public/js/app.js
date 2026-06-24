@@ -269,6 +269,13 @@ function connectSocket() {
     } else if (message.senderId !== state.me.id) {
       socket.emit('message:delivered', { messageId: message.id, chatId: message.chatId });
     }
+    // Audible nudge when a message lands while the app is open but the chat
+    // isn't focused (or the window is in the background). When the app is fully
+    // closed, the OS notification sound takes over via Web Push instead.
+    if (message.senderId !== state.me.id &&
+        (message.chatId !== state.activeChatId || document.hidden)) {
+      ringtone.notify();
+    }
   });
 
   socket.on('chat:update', (summary) => {
@@ -1908,6 +1915,78 @@ async function openUserByUsername(username) {
   } catch { toast('Não foi possível abrir a conversa'); }
 }
 
+// Notification + Mesh settings — opened from the ⚙️ gear in the sidebar. This
+// is where the call ring volume/vibration live (the user asked for a louder,
+// adjustable ring) and where the Mesh network is made explicit and easy to find.
+function settingsModal() {
+  // --- ring mode selector ---
+  const ringSelect = el('select', { class: 'select-input' });
+  for (const [v, label] of [
+    ['loud', '🔊 Alto e chamativo'],
+    ['normal', '🔉 Normal'],
+    ['vibrate', '📳 Só vibrar'],
+    ['silent', '🔕 Silencioso'],
+  ]) {
+    const o = el('option', { value: v }, label);
+    if (v === ringtone.ringMode()) o.setAttribute('selected', '');
+    ringSelect.append(o);
+  }
+  ringSelect.onchange = () => { ringtone.setRingMode(ringSelect.value); };
+
+  // --- on-by-default boolean toggle helper (stores '1'/'0'; absent == on) ---
+  const boolRow = (key, onText, offText) => {
+    const isOn = () => localStorage.getItem(key) !== '0';
+    const label = el('span', {}, isOn() ? onText : offText);
+    const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' },
+      isOn() ? 'Desativar' : 'Ativar');
+    btn.onclick = () => {
+      const next = !isOn();
+      localStorage.setItem(key, next ? '1' : '0');
+      label.textContent = next ? onText : offText;
+      btn.textContent = next ? 'Desativar' : 'Ativar';
+    };
+    return el('div', { style: 'display:flex;align-items:center;gap:12px' }, btn, label);
+  };
+
+  const testBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3)' }, '🔔 Testar toque');
+  testBtn.onclick = () => { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 3500); };
+
+  // --- mesh status line + toggle (make the mesh feature explicit) ---
+  const peers = state.mesh ? state.mesh.status().peers : 0;
+  const meshState = !state.mesh ? 'indisponível neste aparelho'
+    : state.mesh.enabled ? (peers > 0 ? `ativo · ${peers} aparelho(s) por perto` : 'ativo · procurando aparelhos por perto…')
+    : 'desativado';
+
+  const body = el('div', { class: 'modal-body' },
+    el('h3', { class: 'settings-section' }, '🔔 Notificações e chamadas'),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Toque de chamada'), ringSelect),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Vibrar ao receber chamada'),
+      boolRow('speedvox_vibrate', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Som ao chegar mensagem (app aberto)'),
+      boolRow('speedvox_msg_sound', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' }, testBtn),
+    el('p', { class: 'auth-hint' },
+      'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
+
+    el('h3', { class: 'settings-section' }, '📡 Rede Mesh (funciona sem internet)'),
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'O SpeedVox conversa direto entre aparelhos por perto (Bluetooth/Wi-Fi Direct), mesmo sem internet — é o que torna ele superior ao WhatsApp e ao Telegram em apagões e emergências.'),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, `Estado: ${meshState}`),
+      state.mesh ? meshToggleRow() : el('span', {}, '—')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openOfflineMode(); } }, '📡 Modo Offline / aparelhos por perto')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openMeshDiagnostics(); } }, '🩺 Diagnóstico da Rede Mesh')),
+    el('div', { class: 'field-row' },
+      el('button', { class: 'btn-primary sos-btn', onclick: () => { backdrop.remove(); sendSOS(); } }, '🆘 Emergência (SOS)')));
+
+  const backdrop = modalShell('Configurações', body);
+}
+
 function profileModal() {
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
@@ -2700,7 +2779,12 @@ async function startApp(user) {
   $('#new-group-btn').onclick = newGroupModal;
   $('#logout-btn').onclick = () => { if (confirm('Sair do SpeedVox?')) logout(); };
   $('#my-avatar-btn').onclick = profileModal;
+  $('#settings-btn').onclick = settingsModal;
   $('#status-btn').onclick = openStatusPanel;
+  // The connection dot doubles as a shortcut to the Mesh/offline panel, so the
+  // mesh feature is discoverable straight from the main screen.
+  const netDot = $('#net-indicator');
+  if (netDot) { netDot.style.cursor = 'pointer'; netDot.onclick = openOfflineMode; }
 
   setupPush();
   refreshStatusIndicator();
