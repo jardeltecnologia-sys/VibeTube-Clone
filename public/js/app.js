@@ -393,11 +393,41 @@ function setupMesh() {
     const msg = ev.detail.data;
     if (msg && msg.chatId) addMessage(msg);
   });
+  // A media item (voice note / photo / file) reassembled from mesh chunks.
+  state.mesh.addEventListener('media', (ev) => onMeshMedia(ev.detail));
   // An emergency SOS flooded across the mesh — surface it loudly.
   state.mesh.addEventListener('sos', (ev) => onMeshSOS(ev.detail));
   // Native zero-infrastructure transport (BLE / Wi-Fi Direct) when running in
   // the Capacitor app; a no-op in plain browsers.
   state.meshNearby = attachNearby(state.mesh, { displayName: state.me.displayName });
+}
+
+// A media item (voice note, photo, file) arrived over the mesh, already
+// reassembled from its chunks. Render it as a normal incoming message using a
+// data: URL (no server needed) so it shows up offline, in a blackout.
+function onMeshMedia({ from, chatId, type, mime, name, b64, ts }) {
+  const cid = chatId && state.chats.has(chatId) ? chatId : null;
+  if (!cid) return; // we don't have that conversation loaded; ignore for now
+  const dataUrl = `data:${mime || 'application/octet-stream'};base64,${b64}`;
+  addMessage({
+    id: `mesh-${from}-${ts}-${Math.random().toString(36).slice(2, 7)}`,
+    chatId: cid,
+    senderId: from,
+    type: type || 'file',
+    body: null,
+    mediaUrl: dataUrl,
+    mediaName: name || 'Arquivo',
+    mediaMime: mime || null,
+    mentions: [],
+    forwarded: false,
+    encrypted: false,
+    createdAt: ts || Date.now(),
+    deleted: false,
+    reactions: [],
+    readBy: [],
+    deliveredTo: [],
+  });
+  if (cid !== state.activeChatId || document.hidden) ringtone.notify();
 }
 
 // Route a queued message into the mesh, addressed to its recipient(s). The mesh
@@ -1496,20 +1526,70 @@ function pollNode(m) {
   return wrap;
 }
 
-async function sendFile(file) {
-  if (!file || !state.activeChatId) return;
-  try {
-    toast('Enviando…');
+// Read a File/Blob as base64 (without the "data:...;base64," prefix).
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => { const s = String(r.result); resolve(s.slice(s.indexOf(',') + 1)); };
+    r.onerror = () => reject(new Error('Falha ao ler o arquivo'));
+    r.readAsDataURL(file);
+  });
+}
+
+// Deliver a media item. When online, upload to the server (full size, any file).
+// When offline but the mesh is up, send it chunked over the mesh so voice notes
+// and photos still reach nearby people in a blackout — no internet, no towers.
+async function deliverMedia({ file, type, mediaName }) {
+  if (!state.activeChatId) return;
+  const online = state.socket && state.socket.connected;
+  if (online) {
     const up = await api.upload(file);
-    const isImage = (up.mime || '').startsWith('image/');
+    const finalType = type || ((up.mime || '').startsWith('image/') ? 'image' : 'file');
     queueAndSend({
       chatId: state.activeChatId,
-      type: isImage ? 'image' : 'file',
+      type: finalType,
       mediaUrl: up.url,
-      mediaName: up.name,
+      mediaName: mediaName || up.name,
       mediaMime: up.mime,
       replyTo: state.replyTo ? state.replyTo.id : undefined,
     });
+    return;
+  }
+  // Offline → mesh.
+  if (!(state.mesh && state.mesh.enabled)) {
+    toast('Sem internet. Ative a Rede Mesh (⚙️) para enviar mídia offline.');
+    return;
+  }
+  const b64 = await fileToBase64(file);
+  if (b64.length > 700000) {
+    toast('Mídia grande demais para a rede mesh. Tente um áudio curto ou foto menor.');
+    return;
+  }
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat) return;
+  const mime = file.type || 'application/octet-stream';
+  const finalType = type || (mime.startsWith('image/') ? 'image' : 'file');
+  // Show it locally right away with a data: URL.
+  const msg = optimisticMessage({
+    clientId: newClientId(), chatId: chat.id, type: finalType,
+    mediaUrl: `data:${mime};base64,${b64}`, mediaName: mediaName || file.name, mediaMime: mime,
+  });
+  msg.pending = false;
+  addMessage(msg);
+  const meta = { chatId: chat.id, type: finalType, mime, name: mediaName || file.name, b64 };
+  if (chat.type === 'direct' && chat.otherUser) {
+    state.mesh.sendMedia(chat.otherUser.id, meta);
+  } else if (chat.type === 'group' && Array.isArray(chat.members)) {
+    for (const m of chat.members) if (m.id !== state.me.id) state.mesh.sendMedia(m.id, meta);
+  }
+  toast('Enviando pela Rede Mesh…');
+}
+
+async function sendFile(file) {
+  if (!file || !state.activeChatId) return;
+  try {
+    const isImage = (file.type || '').startsWith('image/');
+    await deliverMedia({ file, type: isImage ? 'image' : 'file' });
     clearReply();
   } catch (err) { toast('Falha no envio: ' + err.message); }
 }
@@ -1631,14 +1711,7 @@ async function toggleVoiceRecording() {
     if (blob.size < 800) return; // ignore accidental taps
     const file = new File([blob], `voz-${Date.now()}.webm`, { type: 'audio/webm' });
     try {
-      const up = await api.upload(file);
-      queueAndSend({
-        chatId: state.activeChatId,
-        type: 'audio',
-        mediaUrl: up.url,
-        mediaName: 'Mensagem de voz',
-        mediaMime: up.mime,
-      });
+      await deliverMedia({ file, type: 'audio', mediaName: 'Mensagem de voz' });
     } catch (err) { toast('Falha ao enviar áudio: ' + err.message); }
   };
   mediaRecorder.start();
