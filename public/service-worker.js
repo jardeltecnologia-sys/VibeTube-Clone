@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v39';
+const CACHE = 'speedvox-shell-v40';
 const SHELL = [
   '/',
   '/index.html',
@@ -69,9 +69,14 @@ self.addEventListener('push', (event) => {
       icon: '/icons/icon.svg',
       badge: '/icons/icon.svg',
       renotify: Boolean(data.tag),
-      // Calls: keep the notification up until tapped, and vibrate like a ring.
+      // Calls: keep the notification up until tapped, vibrate like a ring, and
+      // offer Answer/Decline buttons (the closest the web gets to a call screen).
       requireInteraction: isCall,
       vibrate: isCall ? [500, 300, 500, 300, 500, 300, 500] : undefined,
+      actions: isCall ? [
+        { action: 'answer', title: '📞 Atender' },
+        { action: 'decline', title: 'Recusar' },
+      ] : undefined,
     })
   );
 });
@@ -79,16 +84,23 @@ self.addEventListener('push', (event) => {
 // Focus (or open) the app and jump to the relevant chat when tapped.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const chatId = event.notification.data && event.notification.data.chatId;
+  const d = event.notification.data || {};
+  const chatId = d.chatId;
+  const callId = d.callId;
+  // "Recusar" on a call notification: just dismiss (the call will time out for
+  // the caller). Answering/tapping opens the app to the ringing call.
+  if (event.action === 'decline') return;
+  const answering = d.type === 'call';
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          if (chatId) client.postMessage({ type: 'open-chat', chatId });
+          if (answering) client.postMessage({ type: 'answer-call', callId });
+          else if (chatId) client.postMessage({ type: 'open-chat', chatId });
           return client.focus();
         }
       }
-      return self.clients.openWindow(`/${chatId ? `?chat=${chatId}` : ''}`);
+      return self.clients.openWindow(`/${chatId && !answering ? `?chat=${chatId}` : ''}`);
     })
   );
 });
