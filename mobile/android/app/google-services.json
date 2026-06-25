@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "219561910322",
+    "project_id": "speedvox-d23b8",
+    "storage_bucket": "speedvox-d23b8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:219561910322:android:36ef8e62e14d3cc8eb9c2b",
+        "android_client_info": {
+          "package_name": "app.speedvox.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBzlFlFGuyrQmOzlhO6p8q7VNp_Vt0AHkc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

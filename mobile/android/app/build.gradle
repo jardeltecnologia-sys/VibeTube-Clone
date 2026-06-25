@@ -38,6 +38,9 @@ dependencies {
     implementation project(':capacitor-android')
     // Mesh sem infraestrutura: descoberta + transporte via Bluetooth/BLE/Wi-Fi Direct.
     implementation 'com.google.android.gms:play-services-nearby:19.3.0'
+    // Push nativo (FCM) para tocar a chamada em tela cheia mesmo com o app fechado.
+    implementation platform('com.google.firebase:firebase-bom:33.1.2')
+    implementation 'com.google.firebase:firebase-messaging'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

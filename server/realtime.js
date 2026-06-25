@@ -9,6 +9,7 @@ const {
   findOrCreateDirectChat,
 } = require('./chat-service');
 const push = require('./push');
+const fcm = require('./fcm');
 
 // In-flight calls, keyed by callId. Used to log history and detect missed calls.
 const activeCalls = new Map();
@@ -161,6 +162,9 @@ function setup(httpServer) {
   // notification wakes the device; when the app opens and reconnects, the server
   // delivers the still-ringing call (see the connection handler).
   function notifyIncomingCall(toUserId, caller, callId, media, chatId) {
+    // Native Android (FCM): rings full-screen even with the app closed.
+    fcm.sendCall(toUserId, { caller: caller.display_name || 'Chamada', callId, media }).catch(() => {});
+    // Web Push fallback (PWA): wakes the device with a notification.
     if (!push.isEnabled()) return;
     push.sendToUser(toUserId, {
       type: 'call',
@@ -509,9 +513,10 @@ function setup(httpServer) {
       }
 
       const calleeOnline = isOnline(to);
-      // App closed AND no way to wake them (no push subscription): tell the
-      // caller immediately instead of ringing into the void.
-      if (!calleeOnline && !push.hasSubscription(to)) {
+      // App closed AND no way to wake them (no Web Push and no native FCM token):
+      // tell the caller immediately instead of ringing into the void.
+      const canWake = push.hasSubscription(to) || fcm.tokensFor(to).length > 0;
+      if (!calleeOnline && !canWake) {
         activeCalls.set(callId, { callerId: userId, calleeId: to, media: callMedia, startedAt: now() });
         socket.emit('call:unavailable', { callId, reason: 'offline' });
         logCall(callId, 'missed');

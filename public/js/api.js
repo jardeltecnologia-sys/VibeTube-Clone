@@ -87,6 +87,7 @@ export const api = {
   deleteStatus: (id) => request('DELETE', `/status/${id}`),
   pushVapid: () => request('GET', '/push/vapid'),
   pushSubscribe: (subscription) => request('POST', '/push/subscribe', { subscription }),
+  registerFcm: (token) => request('POST', '/push/fcm', { token }),
   pushUnsubscribe: (endpoint) => request('POST', '/push/unsubscribe', { endpoint }),
 
   async upload(file) {
