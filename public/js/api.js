@@ -39,6 +39,7 @@ export const api = {
   register: (d) => request('POST', '/auth/register', d),
   login: (d) => request('POST', '/auth/login', d),
   resendVerification: (email) => request('POST', '/auth/resend-verification', { email }),
+  forgotPassword: (email) => request('POST', '/auth/forgot-password', { email }),
   me: () => request('GET', '/auth/me'),
 
   searchUsers: (q) => request('GET', `/users/search?q=${encodeURIComponent(q)}`),
