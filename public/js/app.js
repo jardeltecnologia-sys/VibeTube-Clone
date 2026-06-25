@@ -1893,51 +1893,54 @@ async function importFromAgenda(onSaved) {
   } catch { /* ignore: still let the user save plain contacts */ }
 
   const list = el('div', {});
-  const body = el('div', { class: 'modal-body' },
-    el('p', { class: 'auth-hint' }, `${entries.length} contato(s) da agenda. Quem já usa o SpeedVox aparece com ✅; os demais você pode convidar.`),
-    list);
-  const backdrop = modalShell('Adicionar pela agenda', body);
+  // "Marcar todos" — checkbox no topo que seleciona/desmarca todos de uma vez.
+  const allCb = el('input', { type: 'checkbox', checked: '' });
+  const head = el('label', { class: 'user-result', style: 'cursor:pointer;font-weight:600' },
+    allCb, el('div', { class: 'user-result-body' }, el('div', { class: 'user-result-name' }, 'Marcar todos')));
 
+  const rows = []; // { e, user, cb }
   for (const e of entries) {
     const user = e.email ? matched.get(e.email.toLowerCase()) : null;
     const sub = [e.email, e.phone].filter(Boolean).join(' · ') || 'Sem e-mail';
-    const btn = el('button', { class: 'btn-primary', style: 'padding:8px 14px;margin:0' },
-      user ? 'Adicionar e conversar' : 'Salvar');
-    btn.onclick = async () => {
-      btn.disabled = true;
-      try {
-        const payload = { displayName: e.name, email: e.email, phone: e.phone };
-        if (user) payload.userId = user.id;
-        await api.addContact(payload).catch((err) => {
-          if (!/já está salvo/i.test(err.message || '')) throw err; // ok if duplicate
-        });
-        if (user) {
-          const { chat } = await api.openDirect(user.id);
-          state.chats.set(chat.id, chat);
-          state.socket.emit('chat:join', { chatId: chat.id });
-          backdrop.remove();
-          if (onSaved) onSaved();
-          await openChat(chat.id);
-        } else {
-          btn.textContent = 'Salvo ✓';
-          if (onSaved) onSaved();
-        }
-      } catch (err) { btn.disabled = false; toast(err.message || 'Falha ao salvar'); }
-    };
-    const actions = [btn];
-    // Not on SpeedVox yet → offer a one-tap invite (WhatsApp if there's a number).
-    if (!user) {
-      const inv = el('button', { class: 'btn-primary', style: 'padding:8px 14px;margin:0;background:#25d366' },
-        e.phone ? 'Convidar' : 'Convidar');
-      inv.onclick = () => inviteByPhone(e.phone);
-      actions.push(inv);
-    }
-    list.append(el('div', { class: 'user-result' },
+    const cb = el('input', { type: 'checkbox', checked: '' }); // já vem marcado
+    rows.push({ e, user, cb });
+    list.append(el('label', { class: 'user-result', style: 'cursor:pointer' },
+      cb,
       el('div', { class: 'user-result-body' },
         el('div', { class: 'user-result-name' }, e.name + (user ? ' ✅' : '')),
-        el('div', { class: 'user-result-sub' }, sub)),
-      ...actions));
+        el('div', { class: 'user-result-sub' }, sub))));
   }
+  allCb.onchange = () => rows.forEach((r) => { r.cb.checked = allCb.checked; });
+
+  // Salvar TODOS os selecionados de uma vez (vincula quem já é usuário do app).
+  const saveSel = el('button', { class: 'btn-primary' }, '💾 Salvar selecionados');
+  saveSel.onclick = async () => {
+    const chosen = rows.filter((r) => r.cb.checked);
+    if (!chosen.length) { toast('Marque pelo menos um contato'); return; }
+    saveSel.disabled = true; saveSel.textContent = 'Salvando…';
+    let ok = 0;
+    for (const r of chosen) {
+      const payload = { displayName: r.e.name, email: r.e.email, phone: r.e.phone };
+      if (r.user) payload.userId = r.user.id;
+      try { await api.addContact(payload); ok += 1; }
+      catch (err) { if (/já está salvo/i.test(err.message || '')) ok += 1; }
+    }
+    toast(`${ok} contato(s) salvos`);
+    if (onSaved) onSaved();
+    backdrop.remove();
+  };
+
+  // Convidar os selecionados. O WhatsApp não deixa disparar pra vários números
+  // de uma vez (anti-spam), então abrimos a folha de compartilhamento UMA vez
+  // com o seu link — você cola num grupo/lista de transmissão e chama todo mundo.
+  const inviteSel = el('button', { class: 'btn-primary', style: 'background:#25d366' }, '🔗 Convidar selecionados');
+  inviteSel.onclick = () => { shareMyLink(); };
+
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint' }, `${entries.length} contato(s) da agenda. Quem já usa o SpeedVox aparece com ✅. Marque quem quiser e use os botões abaixo.`),
+    head, list);
+  const footer = el('div', { class: 'modal-footer', style: 'display:flex;gap:8px;flex-wrap:wrap' }, saveSel, inviteSel);
+  const backdrop = modalShell('Adicionar pela agenda', body, footer);
 }
 
 // Add or edit a contact. `existing` = contact to edit; `prefill` = initial values
