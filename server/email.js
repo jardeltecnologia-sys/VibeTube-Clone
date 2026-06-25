@@ -61,4 +61,42 @@ async function sendVerification(to, displayName, link) {
   return true;
 }
 
-module.exports = { isEnabled, sendVerification };
+function resetHtml(displayName, link) {
+  const name = (displayName || '').replace(/[<>&]/g, '');
+  return `<!DOCTYPE html><html><body style="margin:0;background:#0b141a;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+    <div style="max-width:480px;margin:0 auto;padding:32px 24px;color:#e9edef">
+      <h1 style="color:#00a884;font-size:24px;margin:0 0 8px">SpeedVox</h1>
+      <p style="font-size:16px;line-height:1.5">Olá${name ? ' ' + name : ''}! Recebemos um pedido para redefinir a sua senha.</p>
+      <p style="font-size:16px;line-height:1.5">Toque no botão abaixo para criar uma nova senha:</p>
+      <p style="text-align:center;margin:28px 0">
+        <a href="${link}" style="background:#00a884;color:#04130e;text-decoration:none;font-weight:700;
+           padding:14px 28px;border-radius:10px;display:inline-block;font-size:16px">Redefinir minha senha</a>
+      </p>
+      <p style="font-size:13px;color:#8696a0;line-height:1.5">Se o botão não funcionar, copie e cole este link:<br>
+        <a href="${link}" style="color:#53bdeb;word-break:break-all">${link}</a></p>
+      <p style="font-size:13px;color:#8696a0">Este link expira em 1 hora. Se você não pediu isto, ignore este e-mail — sua senha continua a mesma.</p>
+    </div></body></html>`;
+}
+
+function resetText(displayName, link) {
+  const name = (displayName || '').replace(/[<>&]/g, '');
+  return `SpeedVox\n\nOlá${name ? ' ' + name : ''}! Recebemos um pedido para redefinir sua senha.\n\n`
+    + `Crie uma nova senha neste link:\n${link}\n\n`
+    + `O link expira em 1 hora. Se você não pediu isto, ignore este e-mail.`;
+}
+
+// Send the password-reset e-mail. Returns true if actually dispatched.
+async function sendPasswordReset(to, displayName, link) {
+  if (config.emailTestMode || !transport) return false;
+  await transport.sendMail({
+    from: config.smtp.from,
+    to,
+    subject: 'Redefinir sua senha — SpeedVox',
+    text: resetText(displayName, link),
+    html: resetHtml(displayName, link),
+    headers: { 'X-Entity-Ref-ID': 'speedvox-reset' },
+  });
+  return true;
+}
+
+module.exports = { isEnabled, sendVerification, sendPasswordReset };

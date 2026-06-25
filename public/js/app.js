@@ -154,6 +154,22 @@ function setupAuthScreen() {
 
   $('#link-device-btn').onclick = linkNewDeviceFlow;
 
+  // "Esqueci minha senha": pede o e-mail e dispara o link de redefinição.
+  $('#forgot-password-btn').onclick = async () => {
+    const prefill = ($('#login-form').querySelector('[name=email]') || {}).value || '';
+    const email = prompt('Digite o seu e-mail para receber o link de redefinição de senha:', prefill);
+    if (!email || !email.trim()) return;
+    const note = $('#auth-error');
+    try {
+      await api.forgotPassword(email.trim());
+      note.style.color = '#00a884';
+      note.textContent = 'Se este e-mail tiver uma conta, enviamos um link para redefinir a senha. Verifique a caixa de entrada (e o spam).';
+    } catch (err) {
+      note.style.color = '';
+      note.textContent = err.message;
+    }
+  };
+
   $('#register-form').onsubmit = async (e) => {
     e.preventDefault();
     const fd = new FormData(e.target);

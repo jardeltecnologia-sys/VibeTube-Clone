@@ -14,6 +14,15 @@ const {
 
 const router = express.Router();
 const DAY = 24 * 60 * 60 * 1000;
+const HOUR = 60 * 60 * 1000;
+
+// Tokens for the "forgot password" flow (short-lived, single domain).
+db.exec(`CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  token      TEXT PRIMARY KEY,
+  user_id    TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL
+);`);
 
 // Local/loopback addresses (dev, tests, server-local calls) skip the per-IP cap.
 function isLoopback(ip) {
@@ -167,6 +176,87 @@ router.post('/resend-verification', async (req, res) => {
     const token = await createVerification(user);
     if (config.emailTestMode) return res.json({ ok: true, devVerifyToken: token });
   }
+  res.json({ ok: true });
+});
+
+// --- Password reset: create token + e-mail the link ---
+async function createPasswordReset(user) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const ts = now();
+  db.prepare('INSERT INTO password_reset_tokens (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)')
+    .run(token, user.id, ts, ts + HOUR);
+  const link = `${config.publicUrl}/api/auth/reset-password?token=${token}`;
+  try { await mailer.sendPasswordReset(user.email, user.display_name, link); }
+  catch (err) { console.error('Falha ao enviar e-mail de redefinição:', err.message); }
+  return token;
+}
+
+// Self-contained page (opened from the e-mail) to set a new password.
+function resetPage(token) {
+  return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1"><title>SpeedVox — Nova senha</title></head>
+    <body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+      background:#0b141a;color:#e9edef;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+      <div style="padding:24px;max-width:360px;width:100%">
+        <h1 style="color:#00a884;font-size:24px;margin:0 0 16px;text-align:center">SpeedVox</h1>
+        <p style="color:#8696a0;line-height:1.5">Defina a sua nova senha:</p>
+        <input id="p1" type="password" placeholder="Nova senha (mín. 6)" style="width:100%;box-sizing:border-box;padding:13px;margin:8px 0;border:0;border-radius:10px;background:#202c33;color:#e9edef">
+        <input id="p2" type="password" placeholder="Repita a nova senha" style="width:100%;box-sizing:border-box;padding:13px;margin:8px 0;border:0;border-radius:10px;background:#202c33;color:#e9edef">
+        <button id="go" style="width:100%;padding:14px;margin-top:8px;border:0;border-radius:10px;background:#00a884;color:#04130e;font-weight:700;font-size:16px;cursor:pointer">Salvar nova senha</button>
+        <p id="msg" style="text-align:center;margin-top:14px;line-height:1.5"></p>
+      </div>
+      <script>
+        var t=${JSON.stringify(token)};
+        document.getElementById('go').onclick=async function(){
+          var p1=document.getElementById('p1').value,p2=document.getElementById('p2').value,m=document.getElementById('msg');
+          if(p1.length<6){m.style.color='#f15c6d';m.textContent='A senha deve ter ao menos 6 caracteres.';return;}
+          if(p1!==p2){m.style.color='#f15c6d';m.textContent='As senhas não conferem.';return;}
+          try{
+            var r=await fetch('/api/auth/reset-password',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:t,password:p1})});
+            var d=await r.json();
+            if(r.ok){m.style.color='#00a884';m.innerHTML='✓ Senha alterada! <a href="/" style="color:#53bdeb">Abrir o SpeedVox</a>';}
+            else{m.style.color='#f15c6d';m.textContent=d.error||'Não foi possível redefinir.';}
+          }catch(e){m.style.color='#f15c6d';m.textContent='Erro de conexão.';}
+        };
+      </script>
+    </body></html>`;
+}
+
+// Request a reset link. Always responds ok (never reveals if the e-mail exists).
+router.post('/forgot-password', async (req, res) => {
+  const addr = String((req.body && req.body.email) || '').toLowerCase().trim();
+  if (!isValidEmail(addr)) return res.status(400).json({ error: 'E-mail inválido' });
+  const rl = rateLimit.check(`forgot:${addr}`, 3, HOUR);
+  if (!rl.allowed) return res.status(429).json({ error: `Aguarde ${rl.retryAfter}s para pedir outro link.` });
+  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(addr);
+  // Only password accounts (not Google-only) can reset, and only if e-mail works.
+  if (user && user.password && mailer.isEnabled()) {
+    const token = await createPasswordReset(user);
+    if (config.emailTestMode) return res.json({ ok: true, devResetToken: token });
+  }
+  res.json({ ok: true });
+});
+
+// Open the reset page from the e-mail link.
+router.get('/reset-password', (req, res) => {
+  const token = String(req.query.token || '');
+  const row = token && db.prepare('SELECT * FROM password_reset_tokens WHERE token = ?').get(token);
+  if (!row || row.expires_at <= now()) {
+    return res.status(400).send(resultPage(false, 'Este link de redefinição é inválido ou expirou. Peça um novo na tela de login.'));
+  }
+  res.send(resetPage(token));
+});
+
+// Apply the new password.
+router.post('/reset-password', async (req, res) => {
+  const token = String((req.body && req.body.token) || '');
+  const password = String((req.body && req.body.password) || '');
+  const row = token && db.prepare('SELECT * FROM password_reset_tokens WHERE token = ?').get(token);
+  if (!row || row.expires_at <= now()) return res.status(400).json({ error: 'Link inválido ou expirado' });
+  if (password.length < 6) return res.status(400).json({ error: 'A senha deve ter ao menos 6 caracteres' });
+  const hash = await bcrypt.hash(password, 10);
+  db.prepare('UPDATE users SET password = ? WHERE id = ?').run(hash, row.user_id);
+  db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').run(row.user_id);
   res.json({ ok: true });
 });
 
