@@ -37,6 +37,15 @@ function verificationHtml(displayName, link) {
     </div></body></html>`;
 }
 
+// Plain-text alternative. Sending a text part alongside the HTML markedly
+// improves deliverability (HTML-only messages score higher as spam).
+function verificationText(displayName, link) {
+  const name = (displayName || '').replace(/[<>&]/g, '');
+  return `SpeedVox\n\nOlá${name ? ' ' + name : ''}! Falta um passo para ativar sua conta.\n\n`
+    + `Confirme seu e-mail abrindo este link:\n${link}\n\n`
+    + `O link expira em 24 horas. Se você não criou esta conta, ignore este e-mail.`;
+}
+
 // Send the verification e-mail. Returns true if actually dispatched.
 async function sendVerification(to, displayName, link) {
   if (config.emailTestMode || !transport) return false; // test/no-SMTP: handled by caller
@@ -44,7 +53,10 @@ async function sendVerification(to, displayName, link) {
     from: config.smtp.from,
     to,
     subject: 'Confirme seu e-mail — SpeedVox',
+    text: verificationText(displayName, link),
     html: verificationHtml(displayName, link),
+    // Help deliverability/reputation for this transactional message.
+    headers: { 'X-Entity-Ref-ID': 'speedvox-verify' },
   });
   return true;
 }
