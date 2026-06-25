@@ -3018,7 +3018,20 @@ async function startApp(user) {
   if (netDot) { netDot.style.cursor = 'pointer'; netDot.onclick = openOfflineMode; }
 
   setupPush();
+  setupNativeCallPush();
   refreshStatusIndicator();
+}
+
+// Native Android (Capacitor): register this device's FCM token so the server
+// can ring incoming calls in full screen even with the app closed.
+async function setupNativeCallPush() {
+  try {
+    if (!isNative()) return;
+    const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeedvoxCall;
+    if (!plugin || !plugin.getToken) return;
+    const { token } = await plugin.getToken();
+    if (token) await api.registerFcm(token);
+  } catch { /* best-effort; calls still work in foreground */ }
 }
 
 // PWA installation: capture the browser's install event and offer a button.
