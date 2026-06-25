@@ -43,6 +43,22 @@ export function messageSoundEnabled() {
   return localStorage.getItem('speedvox_msg_sound') !== '0';
 }
 
+// Unlock/warm up the audio engine on a user gesture. Browsers suspend audio
+// until the user interacts with the page, which would otherwise make an incoming
+// ring silent. Call this on the first tap so the ring is loud when a call lands.
+export function unlock() {
+  const c = audioCtx();
+  if (!c) return;
+  try {
+    const o = c.createOscillator();
+    const g = c.createGain();
+    g.gain.value = 0; // silent — just to wake the audio engine
+    o.connect(g).connect(c.destination);
+    o.start();
+    o.stop(c.currentTime + 0.02);
+  } catch { /* ignore */ }
+}
+
 function beep(freq, start, dur, gainVal, type) {
   const c = ctx;
   if (!c) return;
