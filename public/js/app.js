@@ -1807,9 +1807,12 @@ async function contactsModal() {
   // Import straight from the phone's address book (Gmail-synced contacts too).
   // The SpeedVox app needs no phone number/SIM, so this just makes finding the
   // people you already know much faster.
-  const agendaBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px;background:var(--panel-3)',
+  const agendaBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:10px;background:var(--panel-3)',
     onclick: () => importFromAgenda(refresh) }, '📇 Adicionar pela agenda do celular');
-  const body = el('div', { class: 'modal-body' }, newBtn, agendaBtn, list);
+  // Invite as many people as possible: opens WhatsApp / share sheet with my link.
+  const inviteBtn = el('button', { class: 'btn-primary', style: 'margin-bottom:14px',
+    onclick: shareMyLink }, '🔗 Convidar amigos (WhatsApp, SMS…)');
+  const body = el('div', { class: 'modal-body' }, newBtn, agendaBtn, inviteBtn, list);
   const backdrop = modalShell('Contatos', body);
 
   async function refresh() {
@@ -1891,7 +1894,7 @@ async function importFromAgenda(onSaved) {
 
   const list = el('div', {});
   const body = el('div', { class: 'modal-body' },
-    el('p', { class: 'auth-hint' }, `${entries.length} contato(s) da agenda. Quem já usa o SpeedVox aparece com ✅.`),
+    el('p', { class: 'auth-hint' }, `${entries.length} contato(s) da agenda. Quem já usa o SpeedVox aparece com ✅; os demais você pode convidar.`),
     list);
   const backdrop = modalShell('Adicionar pela agenda', body);
 
@@ -1899,7 +1902,7 @@ async function importFromAgenda(onSaved) {
     const user = e.email ? matched.get(e.email.toLowerCase()) : null;
     const sub = [e.email, e.phone].filter(Boolean).join(' · ') || 'Sem e-mail';
     const btn = el('button', { class: 'btn-primary', style: 'padding:8px 14px;margin:0' },
-      user ? 'Adicionar e conversar' : 'Salvar contato');
+      user ? 'Adicionar e conversar' : 'Salvar');
     btn.onclick = async () => {
       btn.disabled = true;
       try {
@@ -1921,11 +1924,19 @@ async function importFromAgenda(onSaved) {
         }
       } catch (err) { btn.disabled = false; toast(err.message || 'Falha ao salvar'); }
     };
+    const actions = [btn];
+    // Not on SpeedVox yet → offer a one-tap invite (WhatsApp if there's a number).
+    if (!user) {
+      const inv = el('button', { class: 'btn-primary', style: 'padding:8px 14px;margin:0;background:#25d366' },
+        e.phone ? 'Convidar' : 'Convidar');
+      inv.onclick = () => inviteByPhone(e.phone);
+      actions.push(inv);
+    }
     list.append(el('div', { class: 'user-result' },
       el('div', { class: 'user-result-body' },
         el('div', { class: 'user-result-name' }, e.name + (user ? ' ✅' : '')),
         el('div', { class: 'user-result-sub' }, sub)),
-      btn));
+      ...actions));
   }
 }
 
@@ -2051,11 +2062,36 @@ async function openSavedMessages() {
 }
 
 // Copy a public invite link (Telegram t.me-style) that opens a chat with me.
-function shareMyLink() {
-  const link = `${location.origin}/?u=${encodeURIComponent(state.me.username)}`;
-  const done = () => toast('Link copiado: ' + link);
-  if (navigator.clipboard) navigator.clipboard.writeText(link).then(done, () => prompt('Seu link:', link));
-  else prompt('Seu link:', link);
+function inviteUrl() {
+  // Always point invites at the public site (works for the invitee even if I'm
+  // running inside the native app, where location.origin is localhost).
+  const u = state.me && state.me.username ? `?u=${encodeURIComponent(state.me.username)}` : '';
+  return `https://chat.vibetube.com.br/${u}`;
+}
+function inviteText() {
+  return `Vem conversar comigo no SpeedVox! Funciona em mensagens, ligações e até sem internet (rede mesh). Baixe/abra aqui: ${inviteUrl()}`;
+}
+
+// Invite the maximum number of people: open the phone's share sheet (WhatsApp,
+// SMS, etc.). Falls back to copying the link.
+async function shareMyLink() {
+  const text = inviteText();
+  if (navigator.share) {
+    try { await navigator.share({ title: 'SpeedVox', text, url: inviteUrl() }); return; }
+    catch { return; } // user cancelled the share sheet
+  }
+  const link = inviteUrl();
+  if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => toast('Convite copiado: ' + link), () => prompt('Seu convite:', text));
+  else prompt('Seu convite:', text);
+}
+
+// Invite a specific contact by phone number, straight to WhatsApp (most used in
+// Brazil); assumes Brazil (DDI 55) when the number comes without a country code.
+function inviteByPhone(phone) {
+  const digits = String(phone || '').replace(/\D/g, '');
+  if (!digits) { shareMyLink(); return; }
+  const wa = digits.length <= 11 ? `55${digits}` : digits;
+  window.open(`https://wa.me/${wa}?text=${encodeURIComponent(inviteText())}`, '_blank');
 }
 
 // Resolve a ?u=username deep link into an open conversation.
@@ -3007,6 +3043,16 @@ async function boot() {
   window.addEventListener('online', () => { state.online = true; updateNetIndicator(); });
   window.addEventListener('offline', () => { state.online = false; updateNetIndicator(); });
 
+  // Unlock the audio engine on the first interaction so an incoming call rings
+  // out loud (browsers keep audio suspended until the user touches the page).
+  const unlockAudio = () => {
+    ringtone.unlock();
+    window.removeEventListener('pointerdown', unlockAudio);
+    window.removeEventListener('keydown', unlockAudio);
+  };
+  window.addEventListener('pointerdown', unlockAudio);
+  window.addEventListener('keydown', unlockAudio);
+
   // PWA install affordance: when the browser deems the app installable, show an
   // "Instalar app" button so visitors can add it to the home screen.
   setupInstallPrompt();
@@ -3058,7 +3104,21 @@ async function boot() {
   }
 
   if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+    // Auto-update: when a new version is deployed, the new service worker takes
+    // over and we reload once so the user always runs the latest app (fixes the
+    // "stale cached version" problem where new features didn't appear).
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let reloading = false;
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (reloading || !hadController) return; // don't reload on the very first install
+      reloading = true;
+      window.location.reload();
+    });
+    navigator.serviceWorker.register('/service-worker.js').then((reg) => {
+      // Check for a new version now and every time the app regains focus.
+      reg.update().catch(() => {});
+      window.addEventListener('focus', () => reg.update().catch(() => {}));
+    }).catch(() => {});
   }
 }
 
