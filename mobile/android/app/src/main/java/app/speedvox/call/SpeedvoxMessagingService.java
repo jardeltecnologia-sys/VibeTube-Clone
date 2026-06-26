@@ -7,6 +7,8 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.media.AudioAttributes;
+import android.media.RingtoneManager;
 import android.os.Build;
 
 import androidx.core.app.NotificationCompat;
@@ -21,7 +23,9 @@ import java.util.Map;
 public class SpeedvoxMessagingService extends FirebaseMessagingService {
     public static final String PREFS = "speedvox_fcm";
     public static final String KEY_TOKEN = "fcm_token";
-    private static final String CHANNEL_ID = "speedvox_calls";
+    // v2: o canal foi recriado porque canais de notificação são IMUTÁVEIS no
+    // Android — mudar vibração/som só vale com um ID novo (ou reinstalando).
+    private static final String CHANNEL_ID = "speedvox_calls_v2";
 
     @Override
     public void onNewToken(String token) {
@@ -76,7 +80,18 @@ public class SpeedvoxMessagingService extends FirebaseMessagingService {
                 CHANNEL_ID, "Chamadas", NotificationManager.IMPORTANCE_HIGH);
             ch.setDescription("Chamadas recebidas no SpeedVox");
             ch.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
+            // Vibração forte (padrão repetível) — garante o tremor mesmo quando a
+            // tela cheia não abre sozinha.
             ch.enableVibration(true);
+            ch.setVibrationPattern(new long[]{ 0, 1000, 600, 1000, 600, 1000 });
+            // Toca o ringtone do aparelho, alto, como uma chamada de verdade.
+            android.net.Uri ring = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE);
+            AudioAttributes attrs = new AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .build();
+            ch.setSound(ring, attrs);
+            ch.setBypassDnd(true);
             nm.createNotificationChannel(ch);
         }
     }
