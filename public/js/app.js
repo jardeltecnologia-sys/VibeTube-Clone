@@ -648,9 +648,19 @@ function displayText(m) {
 
 // ------------------------------------------------------------------ data load
 async function loadChats() {
-  const { chats } = await api.listChats();
-  state.chats.clear();
-  for (const c of chats) state.chats.set(c.id, c);
+  try {
+    const { chats } = await api.listChats();
+    state.chats.clear();
+    for (const c of chats) state.chats.set(c.id, c);
+    try { localStorage.setItem('speedvox_chats', JSON.stringify(chats)); } catch { /* storage cheio */ }
+  } catch (e) {
+    // Sem internet (apagão): mostra as conversas salvas da última vez, pra o app
+    // abrir mesmo offline. A rede mesh segue funcionando independente disso.
+    let cached = [];
+    try { cached = JSON.parse(localStorage.getItem('speedvox_chats')) || []; } catch { cached = []; }
+    state.chats.clear();
+    for (const c of cached) state.chats.set(c.id, c);
+  }
   renderChatList();
 }
 
@@ -3146,7 +3156,10 @@ function updateNetIndicator() {
 }
 
 function logout() {
+  // Só o botão "Sair" limpa a sessão de verdade (token + perfil/conversas em cache).
   setToken(null);
+  localStorage.removeItem('speedvox_me');
+  localStorage.removeItem('speedvox_chats');
   if (state.socket) state.socket.disconnect();
   location.reload();
 }
@@ -3187,6 +3200,8 @@ async function setupPush() {
 
 async function startApp(user) {
   state.me = user;
+  // Guarda o perfil pra abrir o app offline (apagão) sem precisar do servidor.
+  try { localStorage.setItem('speedvox_me', JSON.stringify(user)); } catch { /* storage cheio */ }
   $('#auth-screen').classList.add('hidden');
   $('#app').classList.remove('hidden');
   refreshMyAvatar();
@@ -3322,11 +3337,24 @@ async function boot() {
   } catch {}
 
   if (getToken()) {
+    let user = null;
     try {
-      const { user } = await api.me();
-      await startApp(user);
-    } catch {
-      setToken(null);
+      const r = await api.me();
+      user = r.user;
+    } catch (e) {
+      if (e && e.status === 401) {
+        // Token realmente inválido/expirado → aí sim sai de verdade.
+        setToken(null);
+        localStorage.removeItem('speedvox_me');
+      } else {
+        // Sem internet, erro passageiro ou volta da tela do Google: NÃO desloga.
+        // Abre o app com o perfil salvo (modo offline) — essencial num apagão.
+        try { user = JSON.parse(localStorage.getItem('speedvox_me')); } catch { user = null; }
+      }
+    }
+    if (user) {
+      try { await startApp(user); }
+      catch (err) { console.warn('[boot] startApp falhou:', err && err.message); }
     }
   }
 
