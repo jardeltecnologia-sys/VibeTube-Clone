@@ -10,6 +10,7 @@ import * as e2ee from './e2ee.js';
 import * as ratchet from './ratchet.js';
 import { qrSVG } from './qrcode.js';
 import { AUDIO_CONSTRAINTS } from './webrtc-quality.js';
+import * as applock from './applock.js';
 
 // ------------------------------------------------------------------ state
 const state = {
@@ -111,6 +112,7 @@ function lastMessagePreview(m) {
   if (!m) return '';
   if (m.deleted) return '🚫 Mensagem apagada';
   if (m.type === 'image') return '📷 Foto';
+  if (m.type === 'video') return '🎬 Vídeo';
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
   if (m.type === 'poll') return `📊 ${(m.poll && m.poll.question) || 'Enquete'}`;
@@ -794,6 +796,7 @@ function openChatMenu(anchor, chat) {
   menu.append(item(chat.archived ? 'Desarquivar' : 'Arquivar', () => api.archiveChat(chat.id, !chat.archived).then(applyChatPatch)));
   menu.append(item(chat.muted ? 'Reativar som' : 'Silenciar 8h', () =>
     api.muteChat(chat.id, chat.muted ? 0 : Date.now() + 8 * 3600 * 1000).then(applyChatPatch)));
+  menu.append(item(`⏱ Mensagens temporárias${chat.disappearingTimer ? ' (ativas)' : ''}`, () => quickDisappearing(chat)));
 
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
@@ -911,9 +914,12 @@ function callMessageNode(m) {
   const callBack = el('button', { class: 'call-log-btn', title: 'Ligar de volta',
     onclick: () => { if (chat && chat.otherUser) state.calls.startCall(chat.otherUser, c.media); } },
     c.media === 'video' ? '🎥' : '📞');
+  const mine = m.senderId === state.me.id;
+  const dir = mine ? '↗' : '↙'; // feita / recebida
   return el('div', { class: `call-log${missed ? ' missed' : ''}` },
-    el('span', { class: 'call-log-icon' }, c.media === 'video' ? '📹' : '📞'),
-    el('span', { class: 'call-log-text' }, callLabel(m)),
+    el('span', { class: 'call-log-icon' }, c.media === 'video' ? '🎥' : '📞'),
+    el('span', { class: 'call-log-text' },
+      el('span', { class: 'call-log-dir' }, dir + ' '), callLabel(m)),
     el('span', { class: 'call-log-time' }, fmtTime(m.createdAt)),
     callBack);
 }
@@ -1003,6 +1009,20 @@ function renderMessages(keepScroll) {
           const btn = el('button', { class: 'media-download-btn',
             onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
             '⬇ Baixar foto');
+          wrap.append(btn);
+          parts.push(wrap);
+        }
+      } else if (m.type === 'video' && m.mediaUrl) {
+        const vu = mediaUrl(m.mediaUrl);
+        const showVid = () => el('video', { class: 'msg-video', src: vu, controls: '',
+          preload: 'metadata', playsinline: '' });
+        if (autoDownloadOn()) {
+          parts.push(el('div', { class: 'msg-media' }, showVid()));
+        } else {
+          const wrap = el('div', { class: 'msg-media' });
+          const btn = el('button', { class: 'media-download-btn',
+            onclick: () => { wrap.innerHTML = ''; wrap.append(showVid()); } },
+            '▶ Carregar vídeo');
           wrap.append(btn);
           parts.push(wrap);
         }
@@ -1645,12 +1665,21 @@ function fileToBase64(file) {
 // Deliver a media item. When online, upload to the server (full size, any file).
 // When offline but the mesh is up, send it chunked over the mesh so voice notes
 // and photos still reach nearby people in a blackout — no internet, no towers.
+// Tipo da mensagem a partir do mime (foto, vídeo, áudio ou arquivo genérico).
+function mediaTypeFor(mime) {
+  const m = String(mime || '');
+  if (m.startsWith('image/')) return 'image';
+  if (m.startsWith('video/')) return 'video';
+  if (m.startsWith('audio/')) return 'audio';
+  return 'file';
+}
+
 async function deliverMedia({ file, type, mediaName }) {
   if (!state.activeChatId) return;
   const online = state.socket && state.socket.connected;
   if (online) {
     const up = await api.upload(file);
-    const finalType = type || ((up.mime || '').startsWith('image/') ? 'image' : 'file');
+    const finalType = type || mediaTypeFor(up.mime || file.type);
     queueAndSend({
       chatId: state.activeChatId,
       type: finalType,
@@ -1674,7 +1703,7 @@ async function deliverMedia({ file, type, mediaName }) {
   const chat = state.chats.get(state.activeChatId);
   if (!chat) return;
   const mime = file.type || 'application/octet-stream';
-  const finalType = type || (mime.startsWith('image/') ? 'image' : 'file');
+  const finalType = type || mediaTypeFor(mime);
   // Show it locally right away with a data: URL.
   const msg = optimisticMessage({
     clientId: newClientId(), chatId: chat.id, type: finalType,
@@ -1694,8 +1723,8 @@ async function deliverMedia({ file, type, mediaName }) {
 async function sendFile(file) {
   if (!file || !state.activeChatId) return;
   try {
-    const isImage = (file.type || '').startsWith('image/');
-    await deliverMedia({ file, type: isImage ? 'image' : 'file' });
+    // Deixa o tipo (foto / vídeo / áudio / arquivo) ser detectado pelo mime.
+    await deliverMedia({ file });
     clearReply();
   } catch (err) { toast('Falha no envio: ' + err.message); }
 }
@@ -2210,6 +2239,102 @@ async function openUserByUsername(username) {
 // Notification + Mesh settings — opened from the ⚙️ gear in the sidebar. This
 // is where the call ring volume/vibration live (the user asked for a louder,
 // adjustable ring) and where the Mesh network is made explicit and easy to find.
+// Modal para definir/alterar o PIN do bloqueio (com opção de digital).
+async function openAppLockSetup() {
+  const pin1 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
+    maxlength: '12', placeholder: 'Novo PIN (mín. 4 dígitos)', style: 'margin-bottom:10px' });
+  const pin2 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
+    maxlength: '12', placeholder: 'Repita o PIN', style: 'margin-bottom:10px' });
+  const bioAvail = await applock.biometricAvailable();
+  const bioChk = el('input', { type: 'checkbox', checked: bioAvail ? '' : null });
+  const bioRow = el('label', { style: 'display:flex;align-items:center;gap:8px;margin:4px 0 10px' },
+    bioChk, el('span', {}, '🔑 Também desbloquear com a digital'));
+  const err = el('div', { class: 'auth-error' });
+  const save = el('button', { class: 'btn-primary', style: 'width:100%' }, 'Ativar bloqueio');
+
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'Crie um PIN para abrir o SpeedVox. Ele fica guardado só no seu aparelho (em forma cifrada) — nem o servidor sabe seu PIN.'),
+    pin1, pin2,
+    bioAvail ? bioRow : el('p', { class: 'auth-hint' }, 'Este aparelho não oferece digital pelo navegador; o bloqueio usará o PIN.'),
+    err, save);
+  const bd = modalShell('🔒 Bloqueio do app', body);
+
+  save.onclick = async () => {
+    const p = pin1.value.trim();
+    if (!/^\d{4,}$/.test(p)) { err.textContent = 'Use pelo menos 4 dígitos (só números).'; return; }
+    if (p !== pin2.value.trim()) { err.textContent = 'Os PINs não conferem.'; return; }
+    await applock.enable(p, { biometric: false });
+    if (bioAvail && bioChk.checked) {
+      try { await applock.biometricRegister(); } catch { toast('Digital não registrada; vale o PIN.'); }
+    }
+    bd.remove();
+    toast('Bloqueio ativado ✅');
+  };
+  setTimeout(() => pin1.focus(), 100);
+}
+
+// Seção "Privacidade e segurança" das configurações (bloqueio + backup).
+function securitySection() {
+  const enabled = applock.isEnabled();
+  const status = enabled
+    ? `Ativado${applock.biometricEnabled() ? ' · com digital' : ' · só PIN'}`
+    : 'Desativado';
+
+  const lockBtns = el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' });
+  if (enabled) {
+    lockBtns.append(
+      el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0',
+        onclick: () => openAppLockSetup() }, 'Alterar PIN'),
+      el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0;background:var(--danger)',
+        onclick: (e) => {
+          if (confirm('Desativar o bloqueio do app?')) { applock.disable(); toast('Bloqueio desativado'); e.target.closest('.modal-backdrop').remove(); }
+        } }, 'Desativar'));
+  } else {
+    lockBtns.append(el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0',
+      onclick: () => openAppLockSetup() }, 'Ativar bloqueio'));
+  }
+
+  return el('div', {},
+    el('h3', { class: 'settings-section' }, '🔒 Privacidade e segurança'),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, `Bloqueio do app (PIN / digital): ${status}`),
+      lockBtns),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Backup das conversas'),
+      el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => exportBackup() },
+        '💾 Fazer backup (exportar)')),
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'O backup baixa um arquivo com suas conversas abertas, pra você guardar onde quiser.'));
+}
+
+// Exporta as conversas carregadas num arquivo (backup local).
+function exportBackup() {
+  try {
+    const data = { app: 'SpeedVox', exportadoEm: new Date().toISOString(),
+      usuario: state.me ? state.me.displayName : '', conversas: [] };
+    for (const [chatId, chat] of state.chats) {
+      const nome = chat.name || (chat.otherUser && chat.otherUser.displayName) || 'Conversa';
+      const msgs = (state.messages.get(chatId) || []).filter((m) => !m.deleted).map((m) => {
+        const autor = (chat.members || []).find((x) => x.id === m.senderId);
+        return {
+          de: autor ? autor.displayName : (m.senderId === (state.me && state.me.id) ? 'Você' : m.senderId),
+          tipo: m.type,
+          texto: m.type === 'text' ? displayText(m) : lastMessagePreview(m),
+          em: new Date(m.createdAt).toISOString(),
+        };
+      });
+      if (msgs.length) data.conversas.push({ nome, tipo: chat.type, mensagens: msgs });
+    }
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a', { href: url, download: `speedvox-backup-${new Date().toISOString().slice(0, 10)}.json` });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    toast(`Backup gerado ✅ (${data.conversas.length} conversa(s))`);
+  } catch (e) { toast('Falha ao gerar backup'); }
+}
+
 function settingsModal() {
   // --- ring mode selector ---
   const ringSelect = el('select', { class: 'select-input' });
@@ -2262,6 +2387,8 @@ function settingsModal() {
     el('div', { class: 'field-row' }, testBtn),
     el('p', { class: 'auth-hint' },
       'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
+
+    securitySection(),
 
     el('h3', { class: 'settings-section' }, '📡 Rede Mesh (funciona sem internet)'),
     el('p', { class: 'auth-hint', style: 'margin-top:0' },
@@ -2627,6 +2754,14 @@ function nearbyControl(backdrop) {
 }
 
 // Dropdown to choose the disappearing-messages timer for a chat.
+// Atalho: abre um modalzinho só pra ligar/desligar mensagens temporárias.
+function quickDisappearing(chat) {
+  modalShell('⏱ Mensagens temporárias', el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'As mensagens novas desta conversa somem automaticamente depois do tempo escolhido.'),
+    disappearingRow(chat)));
+}
+
 function disappearingRow(chat) {
   const options = [
     { v: 0, label: 'Desligado' },
@@ -3142,6 +3277,10 @@ function setupInstallPrompt() {
 }
 
 async function boot() {
+  // Bloqueio do app (PIN/digital) — se ativado, pede pra desbloquear antes
+  // de mostrar qualquer coisa.
+  await applock.guard();
+
   setupAuthScreen();
   checkVerifiedParam();
 
