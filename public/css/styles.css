@@ -589,3 +589,58 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .link-preview-site { font-size: 11px; color: var(--text-dim); margin-top: 5px;
   text-transform: uppercase; letter-spacing: .4px; }
 .link-preview-loading { padding: 10px 12px; font-size: 13px; color: var(--text-dim); }
+
+/* ---------- VÍDEO ---------- */
+.msg-video { max-width: 280px; max-height: 360px; border-radius: 8px; display: block;
+  margin-bottom: 4px; background: #000; }
+
+/* ---------- BANHO DE LOJA: ícones com mais destaque ---------- */
+/* Ícones dos menus deixam de ser "apagados": tom mais forte e contraste no hover. */
+.icon-btn { color: #54656f; }
+.icon-btn:hover { background: rgba(0,0,0,.06); color: #111b21; }
+.chat-header-actions .icon-btn,
+.sidebar-actions .icon-btn { color: #3b4a54; }
+.chat-header-actions .icon-btn:hover,
+.sidebar-actions .icon-btn:hover { background: rgba(0,168,132,.12); color: var(--accent-dark); }
+.sidebar-header { box-shadow: 0 1px 3px rgba(0,0,0,.06); }
+.chat-header { box-shadow: 0 1px 3px rgba(0,0,0,.06); position: relative; z-index: 2; }
+
+/* Cartão de arquivo mais elegante (ícone num quadradinho colorido). */
+.msg-file { gap: 12px; background: rgba(0,0,0,.04); padding: 10px 12px; }
+.msg-file .file-ic { display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border-radius: 10px; background: var(--accent);
+  color: #fff; font-size: 20px; flex-shrink: 0; }
+
+/* Call log repaginado: ícone colorido em círculo + seta de direção. */
+.call-log { gap: 12px; padding: 9px 12px; box-shadow: 0 1px 1px rgba(0,0,0,.08); }
+.call-log-icon { display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; border-radius: 50%; background: rgba(0,168,132,.14);
+  color: var(--accent-dark); font-size: 17px; }
+.call-log.missed .call-log-icon { background: rgba(229,83,95,.14); color: var(--danger); }
+.call-log-dir { font-size: 12px; }
+.call-log-btn { width: 40px; height: 40px; box-shadow: 0 2px 6px rgba(0,168,132,.35); }
+
+/* Botões do composer com mais presença. */
+.composer .icon-btn { color: #54656f; }
+.composer .icon-btn:hover { color: var(--accent-dark); background: rgba(0,168,132,.1); }
+
+/* ---------- BLOQUEIO DO APP (PIN / digital) ---------- */
+.applock-overlay { position: fixed; inset: 0; z-index: 10000;
+  background: radial-gradient(1200px 600px at 50% -10%, #d7f3ea 0%, #f0f2f5 55%);
+  display: flex; align-items: center; justify-content: center; padding: 24px; }
+.applock-card { width: 100%; max-width: 340px; background: #fff; border-radius: 18px;
+  padding: 30px 24px; text-align: center; box-shadow: 0 24px 70px rgba(0,0,0,.18);
+  display: flex; flex-direction: column; align-items: center; }
+.applock-logo { width: 72px; height: 72px; margin-bottom: 14px; }
+.applock-title { font-size: 20px; font-weight: 700; color: #111b21; }
+.applock-sub { font-size: 14px; color: #667781; margin: 4px 0 18px; }
+.applock-pin { width: 100%; text-align: center; font-size: 24px; letter-spacing: 8px;
+  background: #f0f2f5; border: 2px solid transparent; border-radius: 12px; padding: 14px;
+  color: #111b21; outline: none; }
+.applock-pin:focus { border-color: #00a884; }
+.applock-error { color: #e5535f; font-size: 13px; min-height: 18px; margin: 8px 0; }
+.applock-unlock { width: 100%; background: #00a884; color: #04130e; font-weight: 700;
+  font-size: 16px; padding: 13px; border-radius: 12px; }
+.applock-unlock:hover { background: #008f6f; }
+.applock-bio { margin-top: 12px; background: transparent; color: #00a884; font-weight: 600;
+  font-size: 15px; padding: 8px; }
