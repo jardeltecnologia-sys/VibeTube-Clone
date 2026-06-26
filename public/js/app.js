@@ -947,6 +947,13 @@ function renderMessages(keepScroll) {
   const container = $('#messages');
   const atBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
   container.innerHTML = '';
+  // Banner de segurança: aparece no topo das conversas com criptografia de
+  // ponta a ponta (deixa claro que ninguém de fora consegue ler).
+  if (chatIsEncrypted(chat)) {
+    container.append(el('div', { class: 'e2ee-banner' },
+      el('span', { class: 'lock' }, '🔒'),
+      'As mensagens desta conversa são protegidas com criptografia de ponta a ponta. Ninguém fora dela consegue ler — nem o SpeedVox.'));
+  }
   const list = state.messages.get(state.activeChatId) || [];
 
   let lastDay = null;
@@ -1014,7 +1021,10 @@ function renderMessages(keepScroll) {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
-        parts.push(mentionNode(text, m, chat));
+        parts.push(bodyNode(text, m, chat));
+        // Prévia de link (notícias etc.) — só pro primeiro link da mensagem.
+        const url = firstUrl(text);
+        if (url) { const card = linkPreviewNode(url); if (card) parts.push(card); }
       }
     }
 
@@ -1102,18 +1112,48 @@ async function unpinMessage(chatId) {
 }
 
 // Build a message-body node, highlighting @mentions in group chats.
-function mentionNode(text, m, chat) {
+const URL_RE = /https?:\/\/[^\s<]+/gi;
+
+// O primeiro link http(s) de um texto (sem pontuação final colada).
+function firstUrl(text) {
+  const m = String(text || '').match(URL_RE);
+  return m ? m[0].replace(/[.,;:)\]]+$/, '') : null;
+}
+function hostOf(url) {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+// Corpo da mensagem: destaca @menções (em grupos) e transforma URLs em links
+// clicáveis.
+function bodyNode(text, m, chat) {
+  const node = el('div', { class: 'msg-body' });
+  const str = String(text);
+  let last = 0; let match;
+  URL_RE.lastIndex = 0;
+  while ((match = URL_RE.exec(str)) !== null) {
+    if (match.index > last) appendWithMentions(node, str.slice(last, match.index), m, chat);
+    const url = match[0].replace(/[.,;:)\]]+$/, '');
+    node.append(el('a', { class: 'msg-link', href: url, target: '_blank', rel: 'noopener noreferrer' }, url));
+    last = match.index + url.length;
+    URL_RE.lastIndex = last;
+  }
+  if (last < str.length) appendWithMentions(node, str.slice(last), m, chat);
+  return node;
+}
+
+// Acrescenta um trecho de texto ao nó, destacando @menções quando houver.
+function appendWithMentions(node, text, m, chat) {
   if (chat.type !== 'group' || !m.mentions || !m.mentions.length) {
-    return el('div', { class: 'msg-body' }, text);
+    node.append(document.createTextNode(text));
+    return;
   }
   const names = m.mentions
     .map((uid) => (chat.members.find((x) => x.id === uid) || {}).displayName)
     .filter(Boolean)
     .sort((a, b) => b.length - a.length); // longest first to avoid partial overlaps
-  if (!names.length) return el('div', { class: 'msg-body' }, text);
+  if (!names.length) { node.append(document.createTextNode(text)); return; }
   const esc = names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
   const re = new RegExp(`@(${esc})`, 'g');
-  const node = el('div', { class: 'msg-body' });
   let last = 0; let match;
   while ((match = re.exec(text)) !== null) {
     if (match.index > last) node.append(document.createTextNode(text.slice(last, match.index)));
@@ -1121,7 +1161,46 @@ function mentionNode(text, m, chat) {
     last = match.index + match[0].length;
   }
   if (last < text.length) node.append(document.createTextNode(text.slice(last)));
-  return node;
+}
+
+// Cache de prévias de link (evita rebuscar a cada re-render). url -> data|null.
+const linkPreviewCache = new Map();
+const linkPreviewInflight = new Set();
+
+function previewCardFrom(url, d) {
+  const card = el('a', { class: 'link-preview', href: url, target: '_blank', rel: 'noopener noreferrer' });
+  if (d.image) {
+    card.append(el('img', { src: d.image, loading: 'lazy',
+      onerror: function () { this.remove(); } }));
+  }
+  const body = el('div', { class: 'link-preview-body' });
+  if (d.title) body.append(el('div', { class: 'link-preview-title' }, d.title));
+  if (d.description) body.append(el('div', { class: 'link-preview-desc' }, d.description));
+  body.append(el('div', { class: 'link-preview-site' }, d.site || hostOf(url)));
+  card.append(body);
+  return card;
+}
+
+// Cartão de prévia do link. Retorna null quando já se sabe que não há prévia.
+function linkPreviewNode(url) {
+  if (linkPreviewCache.has(url)) {
+    const d = linkPreviewCache.get(url);
+    return d ? previewCardFrom(url, d) : null;
+  }
+  const card = el('a', { class: 'link-preview', href: url, target: '_blank', rel: 'noopener noreferrer' },
+    el('div', { class: 'link-preview-loading' }, '🔗 Carregando prévia do link…'));
+  if (!linkPreviewInflight.has(url)) {
+    linkPreviewInflight.add(url);
+    api.linkPreview(url)
+      .then((d) => {
+        const ok = d && (d.title || d.image);
+        linkPreviewCache.set(url, ok ? d : null);
+        linkPreviewInflight.delete(url);
+        if (state.activeChatId) renderMessages(true);
+      })
+      .catch(() => { linkPreviewCache.set(url, null); linkPreviewInflight.delete(url); });
+  }
+  return card;
 }
 
 // The pinned-message bar above the conversation.

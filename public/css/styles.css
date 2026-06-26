@@ -1,17 +1,18 @@
 :root {
-  --bg: #0b141a;
-  --panel: #111b21;
-  --panel-2: #202c33;
-  --panel-3: #2a3942;
+  /* Tema claro (estilo WhatsApp light) — passa confiança e parece seguro. */
+  --bg: #f0f2f5;
+  --panel: #ffffff;
+  --panel-2: #f0f2f5;
+  --panel-3: #e9edef;
   --accent: #00a884;
   --accent-dark: #008f6f;
-  --text: #e9edef;
-  --text-dim: #8696a0;
-  --bubble-out: #005c4b;
-  --bubble-in: #202c33;
-  --divider: #222d34;
-  --danger: #f15c6d;
-  --chat-bg: #0b141a;
+  --text: #111b21;
+  --text-dim: #667781;
+  --bubble-out: #d9fdd3;
+  --bubble-in: #ffffff;
+  --divider: #e9edef;
+  --danger: #e5535f;
+  --chat-bg: #efeae2;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -38,7 +39,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: radial-gradient(1200px 600px at 50% -10%, #11352c 0%, var(--bg) 55%);
+  background: radial-gradient(1200px 600px at 50% -10%, #d7f3ea 0%, var(--bg) 55%);
 }
 .auth-card {
   width: 100%;
@@ -295,8 +296,8 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .messages {
   flex: 1; overflow-y: auto; padding: 16px 6%;
   display: flex; flex-direction: column; gap: 2px;
-  /* Fundo estilo WhatsApp: cor base + padrão de doodles bem sutil por cima. */
-  background-color: #0b141a;
+  /* Fundo estilo WhatsApp (claro): bege + padrão de doodles bem sutil. */
+  background-color: var(--chat-bg);
   background-image: url('/icons/chat-bg.svg');
   background-repeat: repeat;
   background-size: 360px auto;
@@ -324,14 +325,14 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .msg + .msg { margin-top: 2px; }
 .msg-sender { font-size: 12.5px; font-weight: 700; color: var(--accent); margin-bottom: 2px; }
 .msg-reply {
-  border-left: 3px solid var(--accent); background: rgba(0,0,0,.18);
+  border-left: 3px solid var(--accent); background: rgba(0,0,0,.05);
   padding: 4px 8px; border-radius: 4px; margin-bottom: 4px; font-size: 13px;
 }
 .msg-reply .rname { color: var(--accent); font-weight: 600; display: block; }
 .msg-reply .rtext { color: var(--text-dim); }
 .msg-body { white-space: pre-wrap; }
 .msg-media img { max-width: 260px; border-radius: 6px; display: block; margin-bottom: 4px; cursor: pointer; }
-.msg-file { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,.2);
+.msg-file { display: flex; align-items: center; gap: 10px; background: rgba(0,0,0,.05);
   padding: 10px; border-radius: 6px; margin-bottom: 4px; text-decoration: none; color: var(--text); }
 .msg-file .file-ic { font-size: 24px; }
 .msg-deleted { font-style: italic; color: var(--text-dim); }
@@ -340,7 +341,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .edited-label { font-style: italic; opacity: .8; }
 .msg-meta { display: flex; align-items: center; justify-content: flex-end; gap: 4px;
   font-size: 11px; color: var(--text-dim); margin-top: 2px; }
-.msg.out .msg-meta { color: rgba(233,237,239,.6); }
+.msg.out .msg-meta { color: rgba(17,27,33,.45); }
 .tick { font-size: 13px; }
 .tick.read { color: #53bdeb; }
 .tick.failed { color: var(--danger); cursor: pointer; }
@@ -357,8 +358,8 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .msg-actions { position: absolute; top: 2px; right: 4px; opacity: 0; display: flex; gap: 2px; }
 .msg:hover .msg-actions { opacity: 1; }
 .msg-actions button { font-size: 13px; width: 24px; height: 22px; border-radius: 5px;
-  background: rgba(0,0,0,.35); }
-.msg-actions button:hover { background: rgba(0,0,0,.6); }
+  background: rgba(0,0,0,.06); }
+.msg-actions button:hover { background: rgba(0,0,0,.14); }
 
 /* reply preview + composer */
 .reply-preview { display: flex; align-items: center; gap: 8px; padding: 8px 16px;
@@ -528,7 +529,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .poll { min-width: 220px; max-width: 320px; }
 .poll-q { font-weight: 600; margin-bottom: 8px; }
 .poll-opt { position: relative; padding: 9px 34px 9px 12px; border-radius: 8px; margin-bottom: 6px;
-  background: rgba(0,0,0,.18); cursor: pointer; overflow: hidden; }
+  background: rgba(0,0,0,.05); cursor: pointer; overflow: hidden; }
 .poll-opt.voted { outline: 1px solid var(--accent); }
 .poll-fill { position: absolute; inset: 0 auto 0 0; width: 0; background: rgba(0,168,132,.28);
   transition: width .3s ease; }
@@ -543,7 +544,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 ::-webkit-scrollbar-thumb:hover { background: #3a4a52; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-.msg { box-shadow: 0 1px 1.5px rgba(0,0,0,.2); }
+.msg { box-shadow: 0 1px 1px rgba(0,0,0,.13); }
 .chat-item { transition: background .12s ease; }
 .send-btn, .btn-primary, .auth-tab, .call-btn, .fab { transition: background .12s ease, transform .1s ease, color .12s; }
 .send-btn:active, .fab:active { transform: scale(.93); }
@@ -561,3 +562,30 @@ input, textarea { font-family: inherit; font-size: 15px; }
   .back-btn { display: inline-flex; }
   .msg { max-width: 85%; }
 }
+
+/* ---------- SEGURANÇA / CRIPTOGRAFIA ---------- */
+/* Banner de "ponta a ponta" no topo da conversa (estilo WhatsApp). */
+.e2ee-banner { align-self: center; max-width: 90%; text-align: center;
+  background: #fdf3c9; color: #6b5b00; font-size: 12.5px; line-height: 1.45;
+  padding: 8px 14px; border-radius: 8px; margin: 10px 0 14px; }
+.e2ee-banner .lock { margin-right: 4px; }
+/* Selo de segurança (login / apresentação). */
+.trust-badge { display: inline-flex; align-items: center; gap: 6px; margin-top: 12px;
+  font-size: 12.5px; color: var(--text-dim); }
+.trust-badge .lock { color: var(--accent); font-size: 14px; }
+
+/* ---------- PRÉVIA DE LINKS (notícias) ---------- */
+.msg-link { color: #027eb5; text-decoration: underline; word-break: break-all; }
+.msg.out .msg-link { color: #056b2e; }
+.link-preview { display: block; margin-top: 6px; border-radius: 8px; overflow: hidden;
+  background: rgba(0,0,0,.05); text-decoration: none; color: inherit; max-width: 300px;
+  border-left: 3px solid var(--accent); }
+.link-preview img { width: 100%; max-height: 160px; object-fit: cover; display: block; }
+.link-preview-body { padding: 8px 10px; }
+.link-preview-title { font-weight: 600; font-size: 13.5px; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-preview-desc { font-size: 12.5px; color: var(--text-dim); margin-top: 2px;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.link-preview-site { font-size: 11px; color: var(--text-dim); margin-top: 5px;
+  text-transform: uppercase; letter-spacing: .4px; }
+.link-preview-loading { padding: 10px 12px; font-size: 13px; color: var(--text-dim); }

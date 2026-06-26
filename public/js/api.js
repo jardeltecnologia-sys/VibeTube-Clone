@@ -89,6 +89,7 @@ export const api = {
   pushSubscribe: (subscription) => request('POST', '/push/subscribe', { subscription }),
   registerFcm: (token) => request('POST', '/push/fcm', { token }),
   pushUnsubscribe: (endpoint) => request('POST', '/push/unsubscribe', { endpoint }),
+  linkPreview: (url) => request('GET', `/preview?url=${encodeURIComponent(url)}`),
 
   async upload(file) {
     const fd = new FormData();

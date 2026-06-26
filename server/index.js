@@ -53,6 +53,7 @@ app.use('/api/push', require('./routes/push'));
 app.use('/api/link', require('./routes/link'));
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/mesh', require('./routes/mesh'));
+app.use('/api/preview', require('./routes/preview'));
 
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'speedvox', google: config.google.enabled, time: Date.now() });
