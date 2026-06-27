@@ -13,16 +13,17 @@
 services:
   app:
     build: .
+    container_name: speedvox-app-1
+    env_file:
+      - .env
     environment:
       - PORT=3000
-      - JWT_SECRET=${JWT_SECRET:-change-me-please}
-      - PUBLIC_URL=${PUBLIC_URL:-https://localhost}
-      # Optional: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET, VAPID_*, TURN_*
+      - NODE_ENV=production
+    ports:
+      - "127.0.0.1:3017:3000"
     volumes:
-      - speedvox-data:/app/data
-      - speedvox-uploads:/app/uploads
-    expose:
-      - "3000"
+      - ./data:/app/data
+      - ./uploads:/app/uploads
     restart: unless-stopped
 
   caddy:
