@@ -646,7 +646,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .call-log-btn { width: 40px; height: 40px; box-shadow: 0 2px 6px rgba(0,168,132,.35); }
 
 /* Botões do composer com mais presença. */
-.composer .icon-btn { color: #54656f; }
+.composer .icon-btn { color: #54656f; flex-shrink: 0; }
 .composer .icon-btn:hover { color: var(--accent-dark); background: rgba(0,168,132,.1); }
 
 /* ---------- BLOQUEIO DO APP (PIN / digital) ---------- */

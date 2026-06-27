@@ -1788,8 +1788,11 @@ function queueAndSend(payload, plainText) {
 
 async function sendMessage() {
   const input = $('#message-input');
+  // Mobile IME fix: force-commit any pending composition (e.g. Android Gboard
+  // predictive text) before reading the value.
+  if (document.activeElement === input) input.blur();
   const body = input.value.trim();
-  if (!body || !state.activeChatId) return;
+  if (!body || !state.activeChatId) { input.focus(); return; }
 
   if (localStorage.getItem('speedvox_panic_active') === '1') {
     const msg = {
@@ -1866,6 +1869,8 @@ async function sendMessage() {
   input.style.height = 'auto';
   hideComposerPreview();
   clearReply();
+  // Re-focus so mobile keyboard stays up for rapid follow-up messages.
+  requestAnimationFrame(() => input.focus());
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
@@ -2232,10 +2237,9 @@ function setupComposer() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  // Send button: use pointerdown (fires once for both mouse clicks and touch taps
-  // via the Pointer Events API) with a 300ms guard to prevent any double-fire.
-  // This replaces the old click+touchend combo that caused sendMessage() to be
-  // called twice on mobile (touchend fires first, then the synthetic click).
+  // Send button: use click event with a 300ms guard to prevent any double-fire.
+  // Using click allows the input field to blur and commit the mobile keyboard (IME)
+  // text composition before the value is processed.
   const sendBtn = $('#send-btn');
   let _sendGuard = false;
   function _fireSend(e) {
@@ -2245,7 +2249,7 @@ function setupComposer() {
     sendMessage();
     setTimeout(() => { _sendGuard = false; }, 300);
   }
-  sendBtn.addEventListener('pointerdown', _fireSend);
+  sendBtn.addEventListener('click', _fireSend);
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
