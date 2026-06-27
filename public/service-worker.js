@@ -1,90 +1,70 @@
 // SpeedVox service worker — app-shell caching for an installable, offline-tolerant PWA.
-// Network calls (/api, /socket.io, /uploads) always go to the network; the static
-// shell is cached so the app opens instantly and survives flaky connectivity —
-// the first step toward the mesh/blackout resilience story.
+// Network calls (/api, /socket.io, /uploads) always bypass the service worker.
+// The static shell is cached and updated with a Network-First strategy to avoid stale code.
 
-const CACHE = 'speedvox-shell-v51';
+const CACHE = 'speedvox-shell-v19';
 const SHELL = [
   '/',
   '/index.html',
   '/css/styles.css',
   '/js/app.js',
-  '/js/env.js',
   '/js/api.js',
   '/js/mesh.js',
-  '/js/mesh-nearby.js',
-  '/js/offline.js',
   '/js/calls.js',
   '/js/groupcall.js',
-  '/js/webrtc-quality.js',
-  '/js/ringtone.js',
-  '/js/applock.js',
   '/js/e2ee.js',
   '/js/ratchet.js',
   '/js/qrcode.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
-  '/icons/chat-bg.svg',
-  '/icons/icon-192.png',
-  '/icons/icon-512.png',
-  '/icons/icon-512-maskable.png',
-  '/icons/icon-180.png',
-  // Mesh core (Phase 2) — cached so identity/diagnostics work offline too.
-  '/mesh-core/index.js',
-  '/mesh-core/identity.js',
-  '/mesh-core/crypto.js',
-  '/mesh-core/envelope.js',
-  '/mesh-core/dedupe.js',
-  '/mesh-core/forward.js',
-  '/mesh-core/base64.js',
-  '/mesh-core/chunk.js',
-  '/mesh-core/callsignal.js',
 ];
 
+// Install: cache-bust all files to get the fresh copies, but store under clean keys
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
-});
-
-self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
+    caches.open(CACHE)
+      .then((cache) => {
+        return Promise.all(
+          SHELL.map((url) => {
+            const cacheBustUrl = `${url}${url.includes('?') ? '&' : '?'}cb=${Date.now()}`;
+            return fetch(new Request(cacheBustUrl, { cache: 'reload' }))
+              .then((res) => {
+                if (res.ok) {
+                  return cache.put(url, res);
+                }
+                throw new Error(`Failed to fetch ${url} during SW install`);
+              });
+          })
+        );
+      })
+      .then(() => self.skipWaiting())
   );
 });
 
-// Allow the page to force-activate a waiting service worker without waiting
-// for all tabs to be closed (required for the mobile PWA instant-update flow).
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+// Activate: clean up old caches immediately and claim clients
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys()
+      .then((keys) =>
+        Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      )
+      .then(() => self.clients.claim())
+  );
 });
 
 // --- Web Push: show a notification for an incoming message ---
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
-  const isCall = data.type === 'call';
   const title = data.title || 'SpeedVox';
   event.waitUntil(
     self.registration.showNotification(title, {
-      body: data.body || (isCall ? 'Chamada recebida' : 'Nova mensagem'),
+      body: data.body || 'Nova mensagem',
       tag: data.tag || undefined,
-      data: {
-        chatId: data.chatId || null,
-        callId: data.callId || null,
-        type: data.type || 'message',
-      },
+      data: { chatId: data.chatId || null },
       icon: '/icons/icon.svg',
       badge: '/icons/icon.svg',
       renotify: Boolean(data.tag),
-      // Calls: keep the notification up until tapped, vibrate like a ring, and
-      // offer Answer/Decline buttons (the closest the web gets to a call screen).
-      requireInteraction: isCall,
-      vibrate: isCall ? [500, 300, 500, 300, 500, 300, 500] : undefined,
-      actions: isCall ? [
-        { action: 'answer', title: '📞 Atender' },
-        { action: 'decline', title: 'Recusar' },
-      ] : undefined,
     })
   );
 });
@@ -92,60 +72,66 @@ self.addEventListener('push', (event) => {
 // Focus (or open) the app and jump to the relevant chat when tapped.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const d = event.notification.data || {};
-  const chatId = d.chatId;
-  const callId = d.callId;
-  // "Recusar" on a call notification: just dismiss (the call will time out for
-  // the caller). Answering/tapping opens the app to the ringing call.
-  if (event.action === 'decline') return;
-  const answering = d.type === 'call';
+  const chatId = event.notification.data && event.notification.data.chatId;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {
         if ('focus' in client) {
-          if (answering) client.postMessage({ type: 'answer-call', callId });
-          else if (chatId) client.postMessage({ type: 'open-chat', chatId });
+          if (chatId) client.postMessage({ type: 'open-chat', chatId });
           return client.focus();
         }
       }
-      return self.clients.openWindow(
-        answering ? `/?action=answer&callId=${callId}` : `/${chatId ? `?chat=${chatId}` : ''}`
-      );
+      return self.clients.openWindow(`/${chatId ? `?chat=${chatId}` : ''}`);
     })
   );
 });
 
+// Fetch: Network-First strategy with dynamic route bypass
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Never cache realtime/API/media — go straight to the network.
+  // 1. Dynamic bypass: API, WebSockets, media uploads, and the service worker itself
   if (
     url.pathname.startsWith('/api') ||
     url.pathname.startsWith('/socket.io') ||
-    url.pathname.startsWith('/uploads')
+    url.pathname.startsWith('/uploads') ||
+    url.pathname === '/service-worker.js'
   ) {
+    const fetchOptions = request.method === 'GET' ? { cache: 'no-store' } : {};
+    event.respondWith(fetch(request, fetchOptions));
     return;
   }
 
   if (request.method !== 'GET') return;
 
-  // Cache-first for the static shell, falling back to network and updating cache.
+  // 2. Network-First strategy for static assets and shell
+  const isShellAsset = SHELL.includes(url.pathname);
+  const fetchOptions = isShellAsset ? { cache: 'no-cache' } : {};
+
   event.respondWith(
-    caches.match(request).then((cached) => {
-      const network = fetch(request)
-        .then((res) => {
-          if (res.ok && url.origin === self.location.origin) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put(request, copy));
+    fetch(request, fetchOptions)
+      .then((res) => {
+        // If it's a valid local response, update the cache
+        if (res.ok && url.origin === self.location.origin) {
+          const copy = res.clone();
+          caches.open(CACHE).then((c) => c.put(request, copy));
+        }
+        return res;
+      })
+      .catch(() => {
+        // Network failed (offline) -> fallback to cache (supporting query parameters)
+        return caches.match(request, { ignoreSearch: true }).then((cached) => {
+          if (cached) return cached;
+
+          // If navigation or HTML request, serve index.html as SPA fallback
+          if (request.mode === 'navigate' || (request.headers.get('accept') && request.headers.get('accept').includes('text/html'))) {
+            return caches.match('/index.html', { ignoreSearch: true });
           }
-          return res;
-        })
-        .catch(() => cached || caches.match('/index.html'));
-      return cached || network;
-    })
+
+          // Otherwise, return generic offline response
+          return new Response('Offline', { status: 503, statusText: 'Offline' });
+        });
+      })
   );
 });
-
-
-// cache-bust bolinha-verde-20260627-051726

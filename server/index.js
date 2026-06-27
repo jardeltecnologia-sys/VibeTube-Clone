@@ -38,6 +38,11 @@ app.use((req, res, next) => {
       console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - t}ms`);
     }
   });
+// Disable HTTP caching for all API routes
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.set('Pragma', 'no-cache');
+  res.set('Expires', '0');
   next();
 });
 

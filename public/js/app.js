@@ -3707,7 +3707,26 @@ function refreshMyAvatar() {
   avatarBg($('#my-avatar-btn'), state.me.avatarUrl, state.me.displayName);
 }
 
-function updateNetIndicator() {
+let lastHealthCheck = 0;
+let lastHealthResult = false;
+
+async function checkServerHealth() {
+  const now = Date.now();
+  if (now - lastHealthCheck < 3000) return lastHealthResult;
+  lastHealthCheck = now;
+  try {
+    const res = await fetch(apiUrl('/api/health'), { cache: 'no-store' });
+    if (res.ok) {
+      const data = await res.json();
+      lastHealthResult = (data && data.ok === true);
+      return lastHealthResult;
+    }
+  } catch (e) {}
+  lastHealthResult = false;
+  return false;
+}
+
+async function updateNetIndicator() {
   const ind = $('#net-indicator');
   const meshOn = state.mesh && state.mesh.enabled && state.mesh.status().peers > 0;
   if (state.socket && state.socket.connected) {
@@ -3719,6 +3738,13 @@ function updateNetIndicator() {
   } else {
     ind.className = 'net-indicator offline';
     ind.title = 'Reconectando…';
+
+    const isHealthy = await checkServerHealth();
+    if (isHealthy) {
+      ind.title = 'Conectando ao chat…';
+    } else {
+      ind.title = 'Sem internet ou servidor offline';
+    }
   }
 }
 
@@ -3787,7 +3813,7 @@ async function startApp(user) {
   }
 
   // Fetch ICE servers (STUN + optional TURN) so calls work behind restrictive NATs.
-  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'))).json()).iceServers; } catch { state.iceServers = null; }
+  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'), { cache: 'no-store' })).json()).iceServers; } catch { state.iceServers = null; }
 
   connectSocket();
   setupMesh();
@@ -3918,8 +3944,27 @@ async function boot() {
     history.replaceState(null, '', location.pathname);
   }
 
-  window.addEventListener('online', () => { state.online = true; updateNetIndicator(); });
-  window.addEventListener('offline', () => { state.online = false; updateNetIndicator(); });
+  window.addEventListener('online', async () => {
+    state.online = true;
+    updateNetIndicator();
+    if (state.socket && !state.socket.connected) {
+      state.socket.connect();
+    }
+  });
+
+  let offlineTimeout;
+  window.addEventListener('offline', () => {
+    clearTimeout(offlineTimeout);
+    offlineTimeout = setTimeout(async () => {
+      const isHealthy = await checkServerHealth();
+      if (!isHealthy) {
+        state.online = false;
+        updateNetIndicator();
+      } else {
+        state.online = true;
+      }
+    }, 1000);
+  });
 
   // Unlock the audio engine on the first interaction so an incoming call rings
   // out loud (browsers keep audio suspended until the user touches the page).
@@ -3941,7 +3986,7 @@ async function boot() {
     // app is loaded from local assets in the native build).
     const gbtn = $('#google-btn');
     if (gbtn) gbtn.href = apiUrl('/api/auth/google');
-    const res = await fetch(apiUrl('/api/health'));
+    const res = await fetch(apiUrl('/api/health'), { cache: 'no-store' });
     const h = await res.json();
     if (!h.google) {
       $('#google-btn').classList.add('hidden');
