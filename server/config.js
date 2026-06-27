@@ -54,6 +54,15 @@ const config = {
   },
   dataDir: process.env.SPEEDVOX_DATA_DIR || path.join(__dirname, '..', 'data'),
   uploadDir: process.env.SPEEDVOX_UPLOAD_DIR || path.join(__dirname, '..', 'uploads'),
+  db: {
+    engine: (process.env.DB_ENGINE || (process.env.DATABASE_URL ? 'POSTGRES' : 'SQLITE')).toUpperCase(),
+    url: process.env.DATABASE_URL || '',
+    poolMax: parseInt(process.env.DB_POOL_MAX || '20', 10),
+  },
+  redis: {
+    url: process.env.REDIS_URL || '',
+    required: process.env.REDIS_REQUIRED === '1',
+  },
   // How often to sweep expired (disappearing) messages.
   sweepMs: parseInt(process.env.SWEEP_MS || '15000', 10),
   // Web Push (VAPID). If unset, a key pair is generated and persisted on boot.

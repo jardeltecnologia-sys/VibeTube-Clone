@@ -1,6 +1,8 @@
 'use strict';
 
 const { Server } = require('socket.io');
+const { createAdapter } = require('@socket.io/redis-adapter');
+const { createClient } = require('redis');
 const db = require('./db');
 const config = require('./config');
 const { verifyToken, id, now, publicUser } = require('./util');
@@ -32,12 +34,41 @@ function isOnline(userId) {
   return online.has(userId) && online.get(userId).size > 0;
 }
 
-function setup(httpServer) {
+async function attachRedisAdapter(io) {
+  if (!config.redis.url) {
+    if (config.redis.required) throw new Error('REDIS_REQUIRED=1 but REDIS_URL is not set');
+    console.warn('Socket.IO Redis adapter disabled: REDIS_URL is not set');
+    return;
+  }
+
+  const pubClient = createClient({ url: config.redis.url });
+  const subClient = pubClient.duplicate();
+  pubClient.on('error', (err) => console.error('Redis pub client error', err));
+  subClient.on('error', (err) => console.error('Redis sub client error', err));
+
+  try {
+    await Promise.all([pubClient.connect(), subClient.connect()]);
+    io.adapter(createAdapter(pubClient, subClient));
+    console.log('Socket.IO Redis adapter attached');
+  } catch (err) {
+    if (config.redis.required) throw err;
+    console.error('Socket.IO Redis adapter disabled after connection failure', err);
+  }
+
+  const closeRedis = () => {
+    Promise.allSettled([pubClient.quit(), subClient.quit()]).catch(() => {});
+  };
+  process.once('SIGINT', closeRedis);
+  process.once('SIGTERM', closeRedis);
+}
+
+async function setup(httpServer) {
   const io = new Server(httpServer, {
     maxHttpBufferSize: 1e7,
     // Allow the bundled native app's local origin to connect (web stays same-origin).
     cors: { origin: config.corsOrigins, credentials: true },
   });
+  await attachRedisAdapter(io);
   require('./bus').setIo(io); // let REST routes push realtime updates
 
   // Authenticate every socket from its handshake token.

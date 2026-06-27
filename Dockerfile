@@ -1,8 +1,8 @@
-# SpeedVox server image. Builds better-sqlite3 from source if no prebuilt binary
+# SpeedVox server image. Builds native modules from source if no prebuilt binary
 # is available for the platform.
 FROM node:20-bookworm-slim
 
-# Build tools for native modules (better-sqlite3).
+# Build tools for native modules (better-sqlite3, deasync).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 make g++ ca-certificates \
  && rm -rf /var/lib/apt/lists/*
@@ -27,4 +27,4 @@ VOLUME ["/app/data", "/app/uploads"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
   CMD node -e "require('http').get('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
 
-CMD ["node", "server/index.js"]
+CMD ["./node_modules/.bin/pm2-runtime", "ecosystem.config.js"]

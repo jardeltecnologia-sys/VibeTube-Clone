@@ -84,9 +84,16 @@ app.get('*', (req, res, next) => {
 });
 
 const server = http.createServer(app);
-realtime.setup(server);
 
-server.listen(config.port, () => {
-  console.log(`\n  SpeedVox rodando em ${config.publicUrl}`);
-  console.log(`  Login com Google: ${config.google.enabled ? 'ativado' : 'desativado (configure .env)'}\n`);
+async function start() {
+  await realtime.setup(server);
+  server.listen(config.port, () => {
+    console.log(`\n  SpeedVox rodando em ${config.publicUrl}`);
+    console.log(`  Login com Google: ${config.google.enabled ? 'ativado' : 'desativado (configure .env)'}\n`);
+  });
+}
+
+start().catch((err) => {
+  console.error('Failed to start SpeedVox', err);
+  process.exit(1);
 });

@@ -2,10 +2,10 @@
 #
 # Diferente do docker-compose.yml da raiz (que é o EXEMPLO com Caddy para quem
 # faz self-host do zero), este arquivo reflete a produção real:
-#   - apenas o serviço `app`, escutando em 127.0.0.1:3017 (o nginx do host faz
-#     proxy_pass para essa porta);
+#   - apenas o serviço `app`, escutando em 127.0.0.1:3017 via network_mode host
+#     (o nginx do host faz proxy_pass para essa porta);
 #   - SEM Caddy (o nginx já cuida de 80/443);
-#   - dados persistidos por bind mount em ./data (SQLite) e ./uploads (mídia),
+#   - dados persistidos por bind mount em ./data (rollback SQLite) e ./uploads,
 #     ficando visíveis e fáceis de backup.
 #
 # Uso (em /opt/speedvox):
@@ -21,10 +21,11 @@ services:
     env_file:
       - .env
     environment:
-      - PORT=3000
+      - PORT=3017
       - NODE_ENV=production
-    ports:
-      - "127.0.0.1:3017:3000"
+      - DB_ENGINE=${DB_ENGINE:-POSTGRES}
+      - REDIS_REQUIRED=${REDIS_REQUIRED:-1}
+    network_mode: host
     volumes:
       - ./data:/app/data
       - ./uploads:/app/uploads

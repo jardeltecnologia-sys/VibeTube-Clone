@@ -4,12 +4,23 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const config = require('./config');
+const { createPostgresDb } = require('./pg-sync-db');
 
-if (!fs.existsSync(config.dataDir)) fs.mkdirSync(config.dataDir, { recursive: true });
+const engine = (config.db.engine || '').toUpperCase();
+const usePostgres = engine === 'POSTGRES' || (engine !== 'SQLITE' && Boolean(config.db.url));
 
-const db = new Database(path.join(config.dataDir, 'speedvox.db'));
-db.pragma('journal_mode = WAL');
-db.pragma('foreign_keys = ON');
+if (!usePostgres && !fs.existsSync(config.dataDir)) {
+  fs.mkdirSync(config.dataDir, { recursive: true });
+}
+
+const db = usePostgres
+  ? createPostgresDb({ connectionString: config.db.url, max: config.db.poolMax })
+  : new Database(path.join(config.dataDir, 'speedvox.db'));
+
+if (!usePostgres) {
+  db.pragma('journal_mode = WAL');
+  db.pragma('foreign_keys = ON');
+}
 
 db.exec(`
 CREATE TABLE IF NOT EXISTS users (
@@ -218,6 +229,10 @@ CREATE INDEX IF NOT EXISTS idx_chat_tasks_chat ON chat_tasks(chat_id);
 
 // Migrations for databases created before these columns existed.
 function ensureColumn(table, column, ddl) {
+  if (db.isPostgres) {
+    if (!db.columnExists(table, column)) db.addColumn(table, ddl);
+    return;
+  }
   const cols = db.prepare(`PRAGMA table_info(${table})`).all();
   if (!cols.some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
 }
