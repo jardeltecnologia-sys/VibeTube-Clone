@@ -669,3 +669,114 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .applock-unlock:hover { background: #008f6f; }
 .applock-bio { margin-top: 12px; background: transparent; color: #00a884; font-weight: 600;
   font-size: 15px; padding: 8px; }
+
+/* ============================================================
+   PREMIUM AUDIO PLAYER
+   ============================================================ */
+.msg-audio-player { padding: 8px 10px 6px; border-radius: 14px; width: 100%; max-width: 320px; }
+.ap-row { display: flex; align-items: center; gap: 6px; margin-top: 4px; }
+.ap-play {
+  width: 36px; height: 36px; border-radius: 50%; border: none; cursor: pointer; flex-shrink: 0;
+  background: var(--accent); color: #fff; font-size: 14px;
+  display: flex; align-items: center; justify-content: center;
+  transition: background .15s, transform .1s;
+  box-shadow: 0 2px 8px rgba(0,168,132,.4);
+}
+.ap-play:hover { background: var(--accent-dark); transform: scale(1.08); }
+.ap-play.playing { background: var(--accent-dark); }
+.ap-time, .ap-dur { font-size: 11px; color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; flex-shrink: 0; }
+.ap-track {
+  flex: 1; height: 4px; background: rgba(0,0,0,.12); border-radius: 2px; position: relative;
+  cursor: pointer; margin: 0 2px;
+}
+.ap-fill { height: 100%; background: var(--accent); border-radius: 2px; width: 0; transition: width .08s linear; }
+.ap-knob {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 12px; height: 12px; border-radius: 50%; background: var(--accent);
+  left: -6px; box-shadow: 0 1px 4px rgba(0,0,0,.22); transition: left .08s linear;
+}
+.ap-speed {
+  font-size: 10px; font-weight: 700; background: rgba(0,0,0,.06); border: none; border-radius: 4px;
+  padding: 2px 5px; cursor: pointer; color: var(--text-2); flex-shrink: 0;
+}
+.ap-speed:hover { background: rgba(0,168,132,.14); color: var(--accent-dark); }
+.ap-name {
+  font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; margin-bottom: 2px; max-width: 280px;
+}
+.ap-audio-el { display: none; } /* Hidden – we control playback via JS */
+
+/* ============================================================
+   IMAGE LIGHTBOX
+   ============================================================ */
+.lightbox-overlay {
+  position: fixed; inset: 0; z-index: 99000; background: rgba(0,0,0,.88);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity .22s ease; pointer-events: none;
+}
+.lightbox-overlay.open { opacity: 1; pointer-events: all; }
+.lightbox-img {
+  max-width: 92vw; max-height: 90vh; border-radius: 8px; object-fit: contain;
+  box-shadow: 0 12px 60px rgba(0,0,0,.6);
+  user-select: none; -webkit-user-drag: none;
+}
+.lightbox-close {
+  position: absolute; top: 16px; right: 20px; background: rgba(255,255,255,.12);
+  border: none; color: #fff; font-size: 22px; cursor: pointer; border-radius: 50%;
+  width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(6px); transition: background .15s;
+}
+.lightbox-close:hover { background: rgba(255,255,255,.25); }
+.lightbox-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  background: rgba(255,255,255,.14); border: none; color: #fff; font-size: 36px;
+  cursor: pointer; border-radius: 50%; width: 52px; height: 52px;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(6px); transition: background .15s; z-index: 1;
+}
+.lightbox-nav:hover { background: rgba(255,255,255,.28); }
+.lightbox-prev { left: 16px; }
+.lightbox-next { right: 16px; }
+.lightbox-counter {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+  color: rgba(255,255,255,.7); font-size: 13px; font-weight: 600; letter-spacing: .5px;
+}
+.msg-img { cursor: zoom-in; }
+
+/* ============================================================
+   FILE ATTACHMENT CARD (upgraded)
+   ============================================================ */
+.msg-file {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel-3); padding: 10px 12px; border-radius: 12px;
+  text-decoration: none; color: inherit; max-width: 280px;
+  border: 1px solid rgba(0,0,0,.06);
+  transition: background .15s;
+}
+.msg-file:hover { background: rgba(0,168,132,.07); }
+.msg-file .file-ic {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 42px; height: 42px; border-radius: 10px; background: var(--accent);
+  color: #fff; font-size: 20px; flex-shrink: 0;
+}
+.msg-file .file-info { flex: 1; overflow: hidden; }
+.msg-file .file-name { font-size: 13px; font-weight: 600; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.msg-file .file-size { font-size: 11px; color: var(--text-2); }
+.msg-file .file-dl { font-size: 16px; color: var(--accent); flex-shrink: 0; }
+
+/* ============================================================
+   UPLOAD PROGRESS TOAST
+   ============================================================ */
+.upload-progress-toast {
+  position: fixed; bottom: 80px; left: 50%; transform: translateX(-50%) translateY(20px);
+  background: var(--panel-2); border-radius: 12px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+  padding: 12px 16px; min-width: 220px; display: flex; flex-direction: column; gap: 8px;
+  z-index: 9000; opacity: 0; transition: opacity .25s, transform .25s;
+  font-size: 13px; color: var(--text); font-weight: 500;
+}
+.upload-progress-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.upload-progress-bar {
+  height: 4px; border-radius: 2px; background: var(--accent);
+  width: 0; transition: width .15s ease;
+}

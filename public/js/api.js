@@ -100,4 +100,54 @@ export const api = {
     fd.append('file', file);
     return request('POST', '/upload', fd, true);
   },
+
+  // Upload a single file with XHR progress events.
+  // onProgress(pct: 0-100) — called as data arrives.
+  uploadWithProgress(file, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload');
+      const token = getToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        try {
+          const d = JSON.parse(xhr.responseText);
+          if (xhr.status >= 400) { const err = new Error(d.error || `HTTP ${xhr.status}`); err.status = xhr.status; return reject(err); }
+          resolve(d);
+        } catch { reject(new Error('Resposta inválida do servidor')); }
+      };
+      xhr.onerror = () => reject(new Error('Erro de rede'));
+      const fd = new FormData();
+      fd.append('file', file);
+      xhr.send(fd);
+    });
+  },
+
+  // Batch upload up to 500 files in a single multipart request.
+  // Returns { files: [{ url, name, mime, size }, ...] }
+  async uploadBatch(files, onProgress) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/upload/batch');
+      const token = getToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        try {
+          const d = JSON.parse(xhr.responseText);
+          if (xhr.status >= 400) { const err = new Error(d.error || `HTTP ${xhr.status}`); err.status = xhr.status; return reject(err); }
+          resolve(d);
+        } catch { reject(new Error('Resposta inválida do servidor')); }
+      };
+      xhr.onerror = () => reject(new Error('Erro de rede'));
+      const fd = new FormData();
+      for (const f of files) fd.append('files', f);
+      xhr.send(fd);
+    });
+  },
 };

@@ -83,8 +83,8 @@ const config = {
   // (real clients always arrive through the proxy with a forwarded IP). Tuned
   // generously so people behind shared NAT/CGNAT can still register.
   registerMaxPerIp: parseInt(process.env.REGISTER_MAX_PER_IP || '20', 10),
-  // Upload guard: max file size and a denylist of dangerous extensions.
-  uploadMaxBytes: parseInt(process.env.UPLOAD_MAX_MB || '32', 10) * 1024 * 1024,
+  // Upload guard: max file size 1 GB (supports HD video) and a denylist of dangerous extensions.
+  uploadMaxBytes: parseInt(process.env.UPLOAD_MAX_MB || '1024', 10) * 1024 * 1024,
   // Group size cap. Practically unlimited (blackout/community scenario): the
   // number is only an anti-abuse guard. Text messaging scales to huge groups;
   // group *calls* are full-mesh and only practical for small groups regardless.

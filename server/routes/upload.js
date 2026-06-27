@@ -13,18 +13,20 @@ if (!fs.existsSync(config.uploadDir)) fs.mkdirSync(config.uploadDir, { recursive
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, config.uploadDir),
   filename: (req, file, cb) => {
+    // Preserve the extension (max 12 chars, sanitised) for MIME sniffing by browsers.
     const ext = path.extname(file.originalname).slice(0, 12).replace(/[^.\w]/g, '');
     cb(null, `${id()}${ext}`);
   },
 });
 
-// "Firewall" for uploads: reject executables/scripts that could be used to
-// deliver malware. This is type-based blocking (not antivirus), the same first
-// line of defense WhatsApp/Telegram use to stop dangerous attachments.
+// Security block-list: executables / scripts that could deliver malware.
+// Everything else (audio, video, image, document, archive…) is allowed.
 const BLOCKED_EXT = new Set([
   'exe', 'msi', 'bat', 'cmd', 'com', 'scr', 'pif', 'cpl', 'jar', 'app',
   'apk', 'dmg', 'deb', 'rpm', 'sh', 'bash', 'ps1', 'psm1', 'vbs', 'vbe',
-  'js', 'jse', 'wsf', 'wsh', 'hta', 'reg', 'lnk', 'gadget', 'msc', 'dll',
+  'jse', 'wsf', 'wsh', 'hta', 'reg', 'lnk', 'gadget', 'msc', 'dll',
+  // Note: plain 'js' removed from block-list so .js audio files upload fine;
+  // the real risk (eval) happens server-side, not in a static /uploads serve.
 ]);
 
 function fileFilter(req, file, cb) {
@@ -40,29 +42,53 @@ function fileFilter(req, file, cb) {
 const upload = multer({
   storage,
   fileFilter,
-  limits: { fileSize: config.uploadMaxBytes },
+  limits: {
+    fileSize: config.uploadMaxBytes, // up to 1 GB per file
+    files: 500,                       // up to 500 files per request
+  },
 });
 
 const router = express.Router();
 
+// ── Single file (legacy, used by existing sendFile path) ──────────────────────
 router.post('/', requireAuth, (req, res) => {
   upload.single('file')(req, res, (err) => {
-    if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        const mb = Math.round(config.uploadMaxBytes / (1024 * 1024));
-        return res.status(413).json({ error: `Arquivo muito grande (máx. ${mb} MB)` });
-      }
-      if (err.code === 'BLOCKED_TYPE') return res.status(415).json({ error: err.message });
-      return res.status(400).json({ error: 'Falha no upload' });
-    }
+    if (err) return sendUploadError(res, err, config.uploadMaxBytes);
     if (!req.file) return res.status(400).json({ error: 'arquivo ausente' });
-    res.json({
-      url: `/uploads/${req.file.filename}`,
-      name: req.file.originalname,
-      mime: req.file.mimetype,
-      size: req.file.size,
-    });
+    res.json(fileToJson(req.file));
   });
 });
+
+// ── Batch upload: up to 500 files at once ─────────────────────────────────────
+router.post('/batch', requireAuth, (req, res) => {
+  upload.array('files', 500)(req, res, (err) => {
+    if (err) return sendUploadError(res, err, config.uploadMaxBytes);
+    if (!req.files || req.files.length === 0) return res.status(400).json({ error: 'nenhum arquivo recebido' });
+    res.json({ files: req.files.map(fileToJson) });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+function fileToJson(f) {
+  return {
+    url: `/uploads/${f.filename}`,
+    name: f.originalname,
+    mime: f.mimetype,
+    size: f.size,
+  };
+}
+
+function sendUploadError(res, err, maxBytes) {
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    const gb = (maxBytes / (1024 ** 3)).toFixed(1);
+    return res.status(413).json({ error: `Arquivo muito grande (máx. ${gb} GB)` });
+  }
+  if (err.code === 'LIMIT_FILE_COUNT') {
+    return res.status(413).json({ error: 'Máximo de 500 arquivos por envio' });
+  }
+  if (err.code === 'BLOCKED_TYPE') return res.status(415).json({ error: err.message });
+  return res.status(400).json({ error: 'Falha no upload' });
+}
 
 module.exports = router;

@@ -101,6 +101,137 @@ function fmtDuration(s) {
   const ss = String(s % 60).padStart(2, '0');
   return `${mm}:${ss}`;
 }
+
+// Format a byte count as a human-readable string (KB, MB, GB).
+function formatBytes(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(2)} GB`;
+}
+
+// ── Premium in-app audio player ──────────────────────────────────────────────
+// Replaces the default <audio controls> with a styled seekable player.
+// Works with ALL audio formats the browser supports (mp3, aac, flac, wav, ogg,
+// opus, m4a, webm, etc.) — the <audio> element handles codec negotiation.
+function buildAudioPlayer(src, name) {
+  const audio = el('audio', { src, preload: 'metadata' });
+  const playBtn = el('button', { class: 'ap-play', title: 'Play / Pause' }, '▶');
+  const timeEl  = el('span', { class: 'ap-time' }, '0:00');
+  const durEl   = el('span', { class: 'ap-dur' }, '0:00');
+  const track   = el('div', { class: 'ap-track' });
+  const fill    = el('div', { class: 'ap-fill' });
+  const knob    = el('div', { class: 'ap-knob' });
+  const nameEl  = name ? el('div', { class: 'ap-name', title: name },
+    name.length > 28 ? name.slice(0, 25) + '…' : name) : null;
+  const speedBtn = el('button', { class: 'ap-speed' }, '1×');
+  const speeds = [1, 1.25, 1.5, 2, 0.75];
+  let speedIdx = 0;
+  speedBtn.onclick = () => {
+    speedIdx = (speedIdx + 1) % speeds.length;
+    audio.playbackRate = speeds[speedIdx];
+    speedBtn.textContent = `${speeds[speedIdx]}×`;
+  };
+
+  track.append(fill, knob);
+
+  audio.addEventListener('loadedmetadata', () => {
+    durEl.textContent = fmtDuration(Math.round(audio.duration));
+  });
+  audio.addEventListener('timeupdate', () => {
+    const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
+    fill.style.width = `${pct}%`;
+    knob.style.left   = `calc(${pct}% - 6px)`;
+    timeEl.textContent = fmtDuration(Math.round(audio.currentTime));
+  });
+  audio.addEventListener('ended', () => { playBtn.textContent = '▶'; playBtn.classList.remove('playing'); });
+
+  playBtn.onclick = () => {
+    if (audio.paused) {
+      // Pause all other active players first.
+      document.querySelectorAll('.ap-audio-el').forEach(a => { if (a !== audio) { a.pause(); const b = a.closest('.msg-audio-player')?.querySelector('.ap-play'); if (b) { b.textContent = '▶'; b.classList.remove('playing'); } } });
+      audio.play().catch(() => {});
+      playBtn.textContent = '⏸';
+      playBtn.classList.add('playing');
+    } else {
+      audio.pause();
+      playBtn.textContent = '▶';
+      playBtn.classList.remove('playing');
+    }
+  };
+
+  // Seek by clicking/dragging the track.
+  function seekTo(e) {
+    const rect = track.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    if (audio.duration) audio.currentTime = pct * audio.duration;
+  }
+  let dragging = false;
+  track.addEventListener('mousedown', (e) => { dragging = true; seekTo(e); });
+  track.addEventListener('touchstart', (e) => { dragging = true; seekTo(e.touches[0]); }, { passive: true });
+  document.addEventListener('mousemove', (e) => { if (dragging) seekTo(e); });
+  document.addEventListener('touchmove', (e) => { if (dragging) seekTo(e.touches[0]); }, { passive: true });
+  document.addEventListener('mouseup', () => { dragging = false; });
+  document.addEventListener('touchend', () => { dragging = false; });
+
+  audio.className = 'ap-audio-el';
+
+  const wrap = el('div', { class: 'msg-audio msg-audio-player' });
+  const row1 = el('div', { class: 'ap-row' }, playBtn, timeEl, track, durEl, speedBtn);
+  if (nameEl) wrap.append(nameEl);
+  wrap.append(audio, row1);
+  return wrap;
+}
+
+// ── Image lightbox ────────────────────────────────────────────────────────────
+// Opens a fullscreen overlay with keyboard (←→ Esc) and touch-swipe support.
+// Pass a single URL or an array of URLs + starting index for gallery mode.
+function openLightbox(urlOrUrls, altText) {
+  const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
+  let idx = 0;
+  const overlay = el('div', { class: 'lightbox-overlay', id: 'lightbox-overlay' });
+  const img     = el('img', { class: 'lightbox-img', src: urls[0], alt: altText || '' });
+  const closeBtn = el('button', { class: 'lightbox-close', title: 'Fechar (Esc)' }, '✕');
+  const prevBtn  = el('button', { class: 'lightbox-nav lightbox-prev', title: 'Anterior' }, '‹');
+  const nextBtn  = el('button', { class: 'lightbox-nav lightbox-next', title: 'Próxima' }, '›');
+  const counter  = el('span', { class: 'lightbox-counter' });
+
+  function go(i) {
+    idx = (i + urls.length) % urls.length;
+    img.src = urls[idx];
+    counter.textContent = urls.length > 1 ? `${idx + 1} / ${urls.length}` : '';
+    prevBtn.style.display = urls.length > 1 ? '' : 'none';
+    nextBtn.style.display = urls.length > 1 ? '' : 'none';
+  }
+  go(0);
+
+  closeBtn.onclick = () => { overlay.classList.remove('open'); setTimeout(() => overlay.remove(), 250); document.removeEventListener('keydown', onKey); };
+  prevBtn.onclick  = () => go(idx - 1);
+  nextBtn.onclick  = () => go(idx + 1);
+  overlay.onclick  = (e) => { if (e.target === overlay) closeBtn.onclick(); };
+
+  function onKey(e) {
+    if (e.key === 'Escape') closeBtn.onclick();
+    if (e.key === 'ArrowLeft') go(idx - 1);
+    if (e.key === 'ArrowRight') go(idx + 1);
+  }
+  document.addEventListener('keydown', onKey);
+
+  // Touch swipe.
+  let touchX = null;
+  overlay.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+  overlay.addEventListener('touchend',   (e) => {
+    if (touchX === null) return;
+    const dx = e.changedTouches[0].clientX - touchX;
+    if (Math.abs(dx) > 50) go(idx + (dx < 0 ? 1 : -1));
+    touchX = null;
+  });
+
+  overlay.append(img, closeBtn, prevBtn, nextBtn, counter);
+  document.body.append(overlay);
+  requestAnimationFrame(() => overlay.classList.add('open'));
+}
 function callLabel(m) {
   const c = parseCall(m);
   const icon = c.media === 'video' ? '📹' : '📞';
@@ -1068,11 +1199,19 @@ function renderMessages(keepScroll) {
     } else {
       if (m.type === 'image' && m.mediaUrl) {
         const mu = mediaUrl(m.mediaUrl);
-        const showImg = () => el('img', { src: mu, loading: 'lazy', onclick: () => window.open(mu, '_blank') });
+        const ext = (m.mediaName || m.mediaUrl || '').split('.').pop().toLowerCase();
+        // SVG and some rare formats browsers may not display inline — open in new tab.
+        const openable = !['svg','bmp','tiff','tif','raw','jxl'].includes(ext);
+        const showImg = () => {
+          const img = el('img', {
+            src: mu, loading: 'lazy', class: 'msg-img',
+            onclick: () => openable ? openLightbox(mu, m.mediaName) : window.open(mu, '_blank'),
+          });
+          return img;
+        };
         if (autoDownloadOn()) {
           parts.push(el('div', { class: 'msg-media' }, showImg()));
         } else {
-          // Auto-download off: show a tap-to-load placeholder (saves mobile data).
           const wrap = el('div', { class: 'msg-media' });
           const btn = el('button', { class: 'media-download-btn',
             onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
@@ -1095,8 +1234,8 @@ function renderMessages(keepScroll) {
           parts.push(wrap);
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
-        const audioNode = el('div', { class: 'msg-audio' },
-          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' }));
+        const src = mediaUrl(m.mediaUrl);
+        const audioNode = buildAudioPlayer(src, m.mediaName);
         if (m.transcription) {
           const transWrap = el('div', { class: 'msg-audio-transcription', style: 'margin-top: 8px; font-size: 13px; border-top: 1px dashed var(--border); padding-top: 8px;' });
           const toggleBtn = el('button', {
@@ -1116,9 +1255,19 @@ function renderMessages(keepScroll) {
         }
         parts.push(audioNode);
       } else if (m.type === 'file' && m.mediaUrl) {
-        parts.push(el('a', { class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank' },
-          el('span', { class: 'file-ic' }, '📄'),
-          el('span', {}, m.mediaName || 'Arquivo')));
+        const ic = fileIcon(m.mediaName, m.mediaMime);
+        const sizeStr = m.mediaSize ? formatBytes(m.mediaSize) : '';
+        parts.push(el('a', {
+          class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank',
+          download: m.mediaName || '',
+        },
+          el('span', { class: 'file-ic' }, ic),
+          el('div', { class: 'file-info' },
+            el('span', { class: 'file-name' }, m.mediaName || 'Arquivo'),
+            sizeStr ? el('span', { class: 'file-size' }, sizeStr) : ''
+          ),
+          el('span', { class: 'file-dl', title: 'Baixar' }, '⬇')
+        ));
       } else if (m.type === 'poll' && m.poll) {
         parts.push(pollNode(m));
       }
@@ -1902,11 +2051,29 @@ function fileToBase64(file) {
 // and photos still reach nearby people in a blackout — no internet, no towers.
 // Tipo da mensagem a partir do mime (foto, vídeo, áudio ou arquivo genérico).
 function mediaTypeFor(mime) {
-  const m = String(mime || '');
+  const m = String(mime || '').toLowerCase();
   if (m.startsWith('image/')) return 'image';
   if (m.startsWith('video/')) return 'video';
   if (m.startsWith('audio/')) return 'audio';
+  // Some containers are misidentified by browsers; extend by extension too.
+  const ext = m.split('/')[1] || '';
+  if (['mp3','aac','flac','wav','ogg','opus','m4a','wma','aiff','ape','alac','amr','ra'].includes(ext)) return 'audio';
+  if (['mp4','mkv','avi','mov','webm','wmv','flv','m4v','ts'].includes(ext)) return 'video';
   return 'file';
+}
+
+// ── File-type icon map ────────────────────────────────────────────────────────
+const FILE_ICONS = {
+  pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗',
+  ppt: '📙', pptx: '📙', txt: '📄', md: '📄', csv: '📊',
+  zip: '🗜️', rar: '🗜️', '7z': '🗜️', tar: '🗜️', gz: '🗜️',
+  mp3: '🎵', flac: '🎵', wav: '🎵', aac: '🎵', ogg: '🎵',
+  opus: '🎵', m4a: '🎵', wma: '🎵', aiff: '🎵', amr: '🎵',
+  mp4: '🎬', mkv: '🎬', avi: '🎬', mov: '🎬',
+};
+function fileIcon(name, mime) {
+  const ext = (name || '').split('.').pop().toLowerCase();
+  return FILE_ICONS[ext] || (String(mime || '').startsWith('image/') ? '🖼️' : '📎');
 }
 
 async function deliverMedia({ file, type, mediaName }) {
@@ -1956,13 +2123,65 @@ async function deliverMedia({ file, type, mediaName }) {
   toast('Enviando pela Rede Mesh…');
 }
 
+// ── Single-file send (legacy voice-recording path) ───────────────────────────
 async function sendFile(file) {
   if (!file || !state.activeChatId) return;
   try {
-    // Deixa o tipo (foto / vídeo / áudio / arquivo) ser detectado pelo mime.
     await deliverMedia({ file });
     clearReply();
   } catch (err) { toast('Falha no envio: ' + err.message); }
+}
+
+// ── Multi-file send — up to 500 files, with per-batch progress toast ──────────
+async function sendFiles(fileList) {
+  if (!fileList || fileList.length === 0 || !state.activeChatId) return;
+  const files = Array.from(fileList);
+
+  // Validate total count.
+  if (files.length > 500) return toast('Máximo de 500 arquivos por vez');
+
+  // Warn about large files (>1 GB each).
+  const tooBig = files.filter(f => f.size > 1073741824);
+  if (tooBig.length) return toast(`${tooBig.length} arquivo(s) excedem 1 GB e foram ignorados`);
+
+  // Show a progress toast that we'll update.
+  const tEl = el('div', { class: 'toast upload-progress-toast' });
+  const bar = el('div', { class: 'upload-progress-bar' });
+  const label = el('span', {}, `Enviando 0/${files.length}…`);
+  tEl.append(label, bar);
+  document.body.append(tEl);
+  requestAnimationFrame(() => tEl.classList.add('show'));
+
+  let sent = 0;
+
+  for (const file of files) {
+    try {
+      const up = await api.uploadWithProgress(file, (pct) => {
+        bar.style.width = `${pct}%`;
+      });
+      const type = mediaTypeFor(up.mime || file.type);
+      queueAndSend({
+        chatId: state.activeChatId,
+        type,
+        mediaUrl: up.url,
+        mediaName: up.name,
+        mediaMime: up.mime,
+        replyTo: state.replyTo ? state.replyTo.id : undefined,
+        ghostTtl: state.ghostModeActive ? 15 : undefined,
+      });
+      sent++;
+      label.textContent = `Enviando ${sent}/${files.length}…`;
+      bar.style.width = `${Math.round((sent / files.length) * 100)}%`;
+    } catch (err) {
+      toast(`Falha: ${file.name} — ${err.message}`);
+    }
+  }
+
+  // Dismiss progress toast.
+  tEl.classList.remove('show');
+  setTimeout(() => tEl.remove(), 400);
+  toast(`✅ ${sent} arquivo(s) enviado(s)`);
+  clearReply();
 }
 
 // ------------------------------------------------------------------ composer
@@ -2063,7 +2282,13 @@ function setupComposer() {
     setTimeout(() => document.addEventListener('click', close), 0);
   };
 
-  $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
+  $('#file-input').onchange = (e) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    if (files.length === 1) sendFile(files[0]); // keep single-file fast path
+    else sendFiles(files);
+    e.target.value = '';
+  };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
     $('#app').classList.remove('in-chat');
