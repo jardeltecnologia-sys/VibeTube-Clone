@@ -3615,49 +3615,180 @@ async function openStatusPanel() {
   const backdrop = modalShell('Status', body);
 }
 
+function compressImage(file) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+
+        const maxW = 1280;
+        if (width > maxW) {
+          height = Math.round((height * maxW) / width);
+          width = maxW;
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, ".webp"), {
+              type: 'image/webp',
+              lastModified: Date.now()
+            });
+            resolve(compressedFile);
+          } else {
+            resolve(file);
+          }
+        }, 'image/webp', 0.75);
+      };
+      img.onerror = () => resolve(file);
+    };
+    reader.onerror = () => resolve(file);
+  });
+}
+
+function checkVideoDuration(file) {
+  return new Promise((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.src = URL.createObjectURL(file);
+    video.onloadedmetadata = () => {
+      URL.revokeObjectURL(video.src);
+      resolve(video.duration);
+    };
+    video.onerror = () => {
+      resolve(0);
+    };
+  });
+}
+
 function statusComposer() {
   let chosenColor = STATUS_COLORS[0];
-  let pendingImage = null;
+  let pendingMedia = null; // { url, type: 'image' | 'video' }
 
   const preview = el('div', { class: 'status-compose-preview', style: `background:${chosenColor}` });
   const textInput = el('textarea', { class: 'status-compose-text', placeholder: 'Digite um status', rows: '4' });
-  textInput.oninput = () => { preview.textContent = textInput.value; };
+  textInput.oninput = () => {
+    if (!pendingMedia) preview.textContent = textInput.value;
+  };
   preview.append(textInput);
 
   const swatches = el('div', { class: 'status-swatches' });
   for (const c of STATUS_COLORS) {
     swatches.append(el('button', { class: 'swatch', style: `background:${c}`,
-      onclick: () => { chosenColor = c; preview.style.background = c; if (pendingImage) { pendingImage = null; preview.style.backgroundImage = 'none'; } } }));
+      onclick: () => {
+        chosenColor = c;
+        if (!pendingMedia) {
+          preview.style.background = c;
+        }
+      } }));
   }
 
-  const fileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
+  const fileInput = el('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp,video/mp4,video/webm', style: 'display:none' });
   fileInput.onchange = async () => {
     const f = fileInput.files[0];
+    fileInput.value = '';
     if (!f) return;
+
+    const isImage = f.type.startsWith('image/');
+    const isVideo = f.type.startsWith('video/');
+
+    if (!isImage && !isVideo) {
+      return toast('Formato não suportado. Escolha uma foto ou vídeo.');
+    }
+
+    if (isImage) {
+      if (f.size > 2 * 1024 * 1024) {
+        return toast('Imagem muito pesada. Use uma foto de até 2 MB.');
+      }
+    } else if (isVideo) {
+      if (f.size > 8 * 1024 * 1024) {
+        return toast('Vídeo muito pesado para Status. Use um vídeo de até 8 MB e 15 segundos.');
+      }
+      toast('Validando tempo do vídeo...');
+      const duration = await checkVideoDuration(f);
+      if (duration > 15.5) {
+        return toast('Vídeo muito longo. Use um vídeo de até 15 segundos.');
+      }
+    }
+
     try {
-      const up = await api.upload(f);
-      pendingImage = up.url;
-      preview.style.backgroundImage = `url(${up.url})`;
-      preview.style.backgroundSize = 'cover';
-      preview.style.backgroundPosition = 'center';
+      toast('Carregando arquivo...');
+      let fileToUpload = f;
+
+      if (isImage) {
+        toast('Redimensionando foto...');
+        fileToUpload = await compressImage(f);
+      }
+
+      const up = await api.upload(fileToUpload);
+      pendingMedia = { url: up.url, type: isImage ? 'image' : 'video' };
+
+      preview.style.background = '#000';
+      preview.style.backgroundImage = 'none';
+      preview.querySelectorAll('video').forEach(el => el.remove());
+
+      if (isImage) {
+        preview.style.backgroundImage = `url(${up.url})`;
+        preview.style.backgroundSize = 'cover';
+        preview.style.backgroundPosition = 'center';
+      } else {
+        const vidPreview = el('video', {
+          src: up.url,
+          autoplay: true,
+          loop: true,
+          muted: true,
+          style: 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;z-index:0'
+        });
+        preview.prepend(vidPreview);
+      }
+
       textInput.placeholder = 'Legenda (opcional)';
-    } catch (err) { toast('Falha no upload: ' + err.message); }
+      textInput.value = '';
+      textInput.style.position = 'relative';
+      textInput.style.zIndex = '1';
+      preview.textContent = '';
+      preview.append(textInput);
+      toast('Arquivo carregado com sucesso!');
+    } catch (err) {
+      toast('Falha no upload: ' + err.message);
+    }
   };
 
-  const photoBtn = el('button', { class: 'icon-btn', title: 'Foto', style: 'font-size:20px', onclick: () => fileInput.click() }, '📷');
+  const photoBtn = el('button', { class: 'icon-btn', title: 'Adicionar foto/vídeo', style: 'font-size:20px', onclick: () => fileInput.click() }, '📷');
   const post = el('button', { class: 'btn-primary', onclick: async () => {
     try {
-      if (pendingImage) {
-        await api.postStatus({ type: 'image', mediaUrl: pendingImage, body: textInput.value.trim() || undefined });
+      if (pendingMedia) {
+        await api.postStatus({
+          type: pendingMedia.type,
+          mediaUrl: pendingMedia.url,
+          body: textInput.value.trim() || undefined
+        });
       } else {
-        if (!textInput.value.trim()) return toast('Escreva algo ou escolha uma foto');
-        await api.postStatus({ type: 'text', body: textInput.value.trim(), bgColor: chosenColor });
+        if (!textInput.value.trim()) return toast('Escreva algo ou escolha uma foto/vídeo');
+        await api.postStatus({
+          type: 'text',
+          body: textInput.value.trim(),
+          bgColor: chosenColor
+        });
       }
       backdrop.remove();
       toast('Status publicado');
       refreshStatusIndicator();
       if (state.chatFolder === 'status') renderStatusList();
-    } catch (err) { toast('Falha: ' + err.message); }
+    } catch (err) {
+      toast('Falha ao publicar: ' + err.message);
+    }
   } }, 'Publicar');
 
   const body = el('div', { class: 'modal-body' }, preview,
@@ -3711,6 +3842,18 @@ function viewStatuses(statuses, user, isMine) {
     if (s.type === 'image' && s.mediaUrl) {
       content.style.background = '#000';
       content.append(el('img', { class: 'status-img', src: mediaUrl(s.mediaUrl) }));
+      if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
+    } else if (s.type === 'video' && s.mediaUrl) {
+      content.style.background = '#000';
+      const videoEl = el('video', {
+        class: 'status-img',
+        src: mediaUrl(s.mediaUrl),
+        autoplay: true,
+        playsinline: true,
+        controls: false,
+        style: 'max-width:100%;max-height:100%;object-fit:contain;'
+      });
+      content.append(videoEl);
       if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
     } else {
       content.append(el('div', { class: 'status-text' }, s.body || ''));

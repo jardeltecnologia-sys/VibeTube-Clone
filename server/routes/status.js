@@ -31,9 +31,16 @@ const activeStatuses = (userId) =>
 // Post a new status (expires in 24h).
 router.post('/', (req, res) => {
   const { type, body, mediaUrl, bgColor } = req.body || {};
-  const kind = type === 'image' ? 'image' : 'text';
-  if (kind === 'text' && (!body || !body.trim())) return res.status(400).json({ error: 'texto vazio' });
-  if (kind === 'image' && !mediaUrl) return res.status(400).json({ error: 'imagem ausente' });
+  let kind = 'text';
+  if (type === 'image') kind = 'image';
+  else if (type === 'video') kind = 'video';
+
+  if (kind === 'text' && (!body || !body.trim())) {
+    return res.status(400).json({ error: 'Texto do status não pode ser vazio' });
+  }
+  if ((kind === 'image' || kind === 'video') && !mediaUrl) {
+    return res.status(400).json({ error: 'Arquivo de mídia ausente para o status' });
+  }
   const ts = now();
   const sid = id();
   db.prepare(
