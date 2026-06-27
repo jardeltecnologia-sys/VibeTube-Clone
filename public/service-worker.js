@@ -2,7 +2,7 @@
 // Network calls (/api, /socket.io, /uploads) always bypass the service worker.
 // The static shell is cached and updated with a Network-First strategy to avoid stale code.
 
-const CACHE = 'speedvox-shell-v19';
+const CACHE = 'speedvox-shell-v20';
 const SHELL = [
   '/',
   '/index.html',
@@ -17,6 +17,7 @@ const SHELL = [
   '/js/qrcode.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',
+  '/socket.io/socket.io.js',
 ];
 
 // Install: cache-bust all files to get the fresh copies, but store under clean keys
@@ -94,7 +95,7 @@ self.addEventListener('fetch', (event) => {
   // 1. Dynamic bypass: API, WebSockets, media uploads, and the service worker itself
   if (
     url.pathname.startsWith('/api') ||
-    url.pathname.startsWith('/socket.io') ||
+    (url.pathname.startsWith('/socket.io') && url.pathname !== '/socket.io/socket.io.js') ||
     url.pathname.startsWith('/uploads') ||
     url.pathname === '/service-worker.js'
   ) {

@@ -396,7 +396,23 @@ async function linkNewDeviceFlow() {
 }
 
 // ------------------------------------------------------------------ socket
-function connectSocket() {
+async function connectSocket() {
+  if (typeof io === 'undefined') {
+    try {
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = apiUrl('/socket.io/socket.io.js');
+        script.onload = resolve;
+        script.onerror = reject;
+        document.head.appendChild(script);
+      });
+    } catch (err) {
+      console.error('Failed to load Socket.IO client library, retrying in 5s...', err);
+      setTimeout(connectSocket, 5000);
+      return;
+    }
+  }
+
   // Same-origin for the web/PWA; absolute server URL for the bundled native app.
   const socket = API_BASE
     ? io(API_BASE, { auth: { token: getToken() }, transports: ['websocket', 'polling'] })
@@ -2237,19 +2253,18 @@ function setupComposer() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  // Send button: use click event with a 300ms guard to prevent any double-fire.
-  // Using click allows the input field to blur and commit the mobile keyboard (IME)
-  // text composition before the value is processed.
+  // Send button: use pointerdown event with a 300ms guard to prevent any double-fire.
+  // We do NOT prevent default here so Gboard commits the text composition naturally,
+  // and using pointerdown ensures the click is never "eaten" by keyboard dismissal.
   const sendBtn = $('#send-btn');
   let _sendGuard = false;
   function _fireSend(e) {
-    e.preventDefault();
     if (_sendGuard) return;
     _sendGuard = true;
     sendMessage();
     setTimeout(() => { _sendGuard = false; }, 300);
   }
-  sendBtn.addEventListener('click', _fireSend);
+  sendBtn.addEventListener('pointerdown', _fireSend);
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
