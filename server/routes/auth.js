@@ -11,6 +11,7 @@ const rateLimit = require('../rate-limit');
 const {
   id, now, signToken, publicUser, isValidEmail, isValidUsername,
 } = require('../util');
+const { assignUniqueVirtualNumber } = require('../utils/numberGenerator');
 
 const router = express.Router();
 const DAY = 24 * 60 * 60 * 1000;
@@ -117,6 +118,12 @@ router.post('/register', async (req, res) => {
     `INSERT INTO users (id, username, email, password, display_name, about, email_verified, created_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(userId, username, req.body.email.toLowerCase(), hash, displayName.trim(), 'Disponível', verified, now());
+
+  try {
+    assignUniqueVirtualNumber(userId);
+  } catch (err) {
+    console.error('Falha ao atribuir número virtual ao usuário:', err.message);
+  }
 
   const user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
 
@@ -358,6 +365,11 @@ router.get('/google/callback', async (req, res) => {
         'Disponível',
         now()
       );
+      try {
+        assignUniqueVirtualNumber(userId);
+      } catch (err) {
+        console.error('Falha ao atribuir número virtual ao usuário OAuth:', err.message);
+      }
       user = db.prepare('SELECT * FROM users WHERE id = ?').get(userId);
     }
 

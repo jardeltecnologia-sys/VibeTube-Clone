@@ -2421,6 +2421,14 @@ function settingsModal() {
 }
 
 function profileModal() {
+  const formatVirtualNumber = (num) => {
+    if (!num) return 'Não atribuído';
+    if (num.length === 11) {
+      return `+55 (${num.slice(0, 2)}) ${num.slice(2, 7)}-${num.slice(7)}`;
+    }
+    return num;
+  };
+
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
   let pendingAvatar = null;
@@ -2444,6 +2452,9 @@ function profileModal() {
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Usuário'),
       el('div', {}, '@' + state.me.username)),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, 'Número Virtual'),
+      el('div', {}, formatVirtualNumber(state.me.virtualNumber))),
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openSavedMessages(); } }, '🔖 Mensagens salvas')),
     el('div', { class: 'field-row' },

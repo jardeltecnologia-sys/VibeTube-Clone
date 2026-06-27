@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
   about        TEXT DEFAULT 'Disponível',
   public_key   TEXT,                 -- ECDH public key (JWK) for end-to-end encryption
   last_seen    INTEGER,
+  virtual_number TEXT UNIQUE,
   created_at   INTEGER NOT NULL
 );
 
@@ -221,5 +222,6 @@ ensureColumn('messages', 'mentions', 'mentions TEXT');
 // Scheduled messages: when set and in the future, the message is held back
 // (invisible) until the sweeper delivers it.
 ensureColumn('messages', 'send_at', 'send_at INTEGER');
+ensureColumn('users', 'virtual_number', 'virtual_number TEXT UNIQUE');
 
 module.exports = db;
