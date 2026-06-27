@@ -91,6 +91,10 @@ export const api = {
   pushUnsubscribe: (endpoint) => request('POST', '/push/unsubscribe', { endpoint }),
   linkPreview: (url) => request('GET', `/preview?url=${encodeURIComponent(url)}`),
 
+  listTasks: (chatId) => request('GET', `/chats/${chatId}/tasks`),
+  createTask: (chatId, d) => request('POST', `/chats/${chatId}/tasks`, d),
+  updateTask: (chatId, taskId, d) => request('PATCH', `/chats/${chatId}/tasks/${taskId}`, d),
+
   async upload(file) {
     const fd = new FormData();
     fd.append('file', file);

@@ -50,4 +50,6 @@ function systemMessage(chatId, body, senderId) {
   return message;
 }
 
-module.exports = { setIo, pushChatUpdate, pushChatRemoved, pushStatusUpdate, systemMessage };
+function getIo() { return io; }
+
+module.exports = { setIo, getIo, pushChatUpdate, pushChatRemoved, pushStatusUpdate, systemMessage };

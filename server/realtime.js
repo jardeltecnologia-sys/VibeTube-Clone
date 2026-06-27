@@ -269,7 +269,7 @@ function setup(httpServer) {
     // --- Send a message ---
     socket.on('message:send', (payload, cb) => {
       try {
-        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded, mentions } =
+        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded, mentions, ghostTtl } =
           payload || {};
         if (!isMember(chatId, userId)) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
@@ -317,9 +317,10 @@ function setup(httpServer) {
         // Keep only mentions that are actual members of this chat.
         const validMentions = Array.isArray(mentions)
           ? [...new Set(mentions)].filter((uid) => isMember(chatId, uid)) : [];
+        const ghost = Number(ghostTtl) || null;
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, send_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, send_at, created_at, ghost_ttl)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -335,7 +336,8 @@ function setup(httpServer) {
           expiresAt,
           validMentions.length ? JSON.stringify(validMentions) : null,
           scheduled ? sendAt : null,
-          scheduled ? sendAt : ts
+          scheduled ? sendAt : ts,
+          ghost
         );
 
         // Scheduled: store and stop here — the sweeper delivers it when due.
@@ -400,6 +402,25 @@ function setup(httpServer) {
       );
       // Always refresh my own unread count.
       io.to(`user:${userId}`).emit('chat:update', getChatSummary(chatId, userId));
+
+      // 1. Process Ghost Messages burns (runs regardless of reciprocal read receipts settings!)
+      const unreadGhost = db
+        .prepare(
+          `SELECT id, ghost_ttl FROM messages WHERE chat_id = ? AND sender_id != ? AND ghost_ttl > 0
+           AND id NOT IN (SELECT message_id FROM receipts WHERE user_id = ? AND status = 'read')`
+        )
+        .all(chatId, userId, userId);
+      for (const m of unreadGhost) {
+        setTimeout(() => {
+          try {
+            db.prepare('DELETE FROM messages WHERE id = ?').run(m.id);
+            db.prepare('DELETE FROM audio_transcriptions WHERE message_id = ?').run(m.id);
+            emitToChat(chatId, 'message:ghost-burn', { messageId: m.id, chatId });
+          } catch (err) {
+            console.error('Falha ao queimar mensagem fantasma:', err);
+          }
+        }, m.ghost_ttl * 1000);
+      }
 
       // Read receipts are reciprocal: if I disabled them, I neither send nor
       // (below) receive blue ticks.
@@ -518,6 +539,16 @@ function setup(httpServer) {
     socket.on('call:watchparty', ({ to, payload }) => {
       if (!to) return;
       io.to(`user:${to}`).emit('call:watchparty', { from: userId, payload });
+    });
+
+    socket.on('call:canvas-draw', ({ to, data }) => {
+      if (!to) return;
+      io.to(`user:${to}`).emit('call:canvas-draw', { from: userId, data });
+    });
+
+    socket.on('call:canvas-clear', ({ to }) => {
+      if (!to) return;
+      io.to(`user:${to}`).emit('call:canvas-clear', { from: userId });
     });
 
     // --- Voice / video call signaling (1:1 WebRTC) ---

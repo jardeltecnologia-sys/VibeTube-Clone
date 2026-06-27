@@ -127,6 +127,7 @@ function serializeMessage(row) {
     createdAt: row.created_at,
     editedAt: row.edited_at,
     sendAt: row.send_at || null,
+    ghostTtl: row.ghost_ttl || null,
     deleted: Boolean(row.deleted),
     poll: row.type === 'poll' && !row.deleted ? serializePoll(row) : null,
     transcription: transcriptionRow ? {

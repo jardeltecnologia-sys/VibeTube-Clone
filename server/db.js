@@ -202,6 +202,18 @@ CREATE TABLE IF NOT EXISTS audio_transcriptions (
   summary    TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_tasks (
+  id          TEXT PRIMARY KEY,
+  chat_id     TEXT NOT NULL,
+  message_id  TEXT,
+  title       TEXT NOT NULL,
+  assignee_id TEXT,
+  due_date    INTEGER,
+  completed   INTEGER NOT NULL DEFAULT 0,
+  created_at  INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_chat_tasks_chat ON chat_tasks(chat_id);
 `);
 
 // Migrations for databases created before these columns existed.
@@ -231,5 +243,6 @@ ensureColumn('messages', 'mentions', 'mentions TEXT');
 ensureColumn('messages', 'send_at', 'send_at INTEGER');
 ensureColumn('users', 'virtual_number', 'virtual_number TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_virtual_number ON users(virtual_number)');
+ensureColumn('messages', 'ghost_ttl', 'ghost_ttl INTEGER');
 
 module.exports = db;

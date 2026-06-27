@@ -46,6 +46,7 @@ app.use('/api/auth', require('./routes/auth'));
 app.use('/api/users', require('./routes/users'));
 app.use('/api/contacts', require('./routes/contacts'));
 app.use('/api/chats', require('./routes/chats'));
+app.use('/api/chats', require('./routes/tasks'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/search', require('./routes/search'));
 app.use('/api/status', require('./routes/status'));

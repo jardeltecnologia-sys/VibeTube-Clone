@@ -51,6 +51,8 @@ export class CallManager {
     s.on('call:ice', (d) => this._onIce(d));
     s.on('call:ended', (d) => this._onEnded(d));
     s.on('call:watchparty', (d) => this._onWatchParty(d));
+    s.on('call:canvas-draw', (d) => this._onCanvasDraw(d));
+    s.on('call:canvas-clear', (d) => this._onCanvasClear(d));
   }
 
   // Send a call signal. When the server is reachable, behaves EXACTLY like
@@ -423,6 +425,21 @@ export class CallManager {
       this.noiseAudioContext = null;
     }
     this._stopWatchParty(false);
+    if (this.overlay) {
+      const wrap = this.overlay.querySelector('.call-canvas-wrapper');
+      if (wrap) wrap.style.display = 'none';
+    }
+    if (this.whiteboardCanvas) {
+      this.whiteboardCanvas.onmousedown = null;
+      this.whiteboardCanvas.onmousemove = null;
+      this.whiteboardCanvas.onmouseup = null;
+      this.whiteboardCanvas.ontouchstart = null;
+      this.whiteboardCanvas.ontouchmove = null;
+      this.whiteboardCanvas.ontouchend = null;
+      this.whiteboardCanvas = null;
+      this.whiteboardCtx = null;
+      this.whiteboardDrawLine = null;
+    }
     this.pendingIce = [];
     this.callId = null;
     this.peer = null;
@@ -445,7 +462,6 @@ export class CallManager {
     }, 1000);
   }
 
-  // ---------------------------------------------------------------- UI
   _buildUI() {
     const o = document.createElement('div');
     o.className = 'call-overlay hidden';
@@ -454,6 +470,16 @@ export class CallManager {
       <video class="call-local" autoplay playsinline muted></video>
       <div class="call-yt-wrapper" style="display:none; width: 90%; max-width: 480px; margin: 10px auto; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 16/9; position: relative; z-index: 10;">
         <div id="yt-player-target"></div>
+      </div>
+      <div class="call-canvas-wrapper" style="display:none; width: 90%; max-width: 480px; margin: 10px auto; border-radius: 12px; overflow: hidden; background: #fff; aspect-ratio: 4/3; position: relative; z-index: 10; border: 2px solid var(--accent);">
+        <canvas class="call-canvas-el" style="width: 100%; height: 100%; display: block; cursor: crosshair;"></canvas>
+        <div style="position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px; background: rgba(0,0,0,0.7); padding: 4px 12px; border-radius: 20px; z-index: 20; align-items:center;">
+          <button class="canvas-color" data-color="#000000" style="width: 16px; height: 16px; border-radius: 50%; background: #000; border: 1px solid #fff; cursor: pointer; padding:0;"></button>
+          <button class="canvas-color" data-color="#ff0000" style="width: 16px; height: 16px; border-radius: 50%; background: #f00; border: 1px solid #fff; cursor: pointer; padding:0;"></button>
+          <button class="canvas-color" data-color="#0000ff" style="width: 16px; height: 16px; border-radius: 50%; background: #00f; border: 1px solid #fff; cursor: pointer; padding:0;"></button>
+          <button class="canvas-color" data-color="#008000" style="width: 16px; height: 16px; border-radius: 50%; background: #008000; border: 1px solid #fff; cursor: pointer; padding:0;"></button>
+          <button class="canvas-clear" style="background: none; border: none; color: #fff; cursor: pointer; font-size: 14px; padding: 0 4px; line-height:1;">🗑️</button>
+        </div>
       </div>
       <div class="call-info">
         <div class="call-avatar"></div>
@@ -464,6 +490,7 @@ export class CallManager {
         <button class="call-btn mute" title="Mudo">🎙️</button>
         <button class="call-btn cam" title="Câmera">🎥</button>
         <button class="call-btn watchparty" title="Watch Party" style="display:none;">📺</button>
+        <button class="call-btn whiteboard" title="Quadro Branco" style="display:none;">🎨</button>
         <button class="call-btn accept" title="Atender">📞</button>
         <button class="call-btn hangup" title="Encerrar">📵</button>
       </div>`;
@@ -474,6 +501,7 @@ export class CallManager {
     this.btnMute = o.querySelector('.mute');
     this.btnCam = o.querySelector('.cam');
     this.btnWatchParty = o.querySelector('.watchparty');
+    this.btnWhiteboard = o.querySelector('.whiteboard');
     this.btnAccept = o.querySelector('.accept');
     this.btnHangup = o.querySelector('.hangup');
 
@@ -515,6 +543,15 @@ export class CallManager {
         }
       }
     };
+    this.btnWhiteboard.onclick = () => {
+      const wrap = this.overlay.querySelector('.call-canvas-wrapper');
+      if (wrap.style.display === 'block') {
+        wrap.style.display = 'none';
+      } else {
+        wrap.style.display = 'block';
+        this._initWhiteboard();
+      }
+    };
   }
 
   _showOverlay(phase) {
@@ -532,6 +569,7 @@ export class CallManager {
     this.btnAccept.style.display = phase === 'incoming' ? '' : 'none';
     this.btnCam.style.display = this.media === 'video' ? '' : 'none';
     this.btnWatchParty.style.display = phase === 'active' ? '' : 'none';
+    this.btnWhiteboard.style.display = phase === 'active' ? '' : 'none';
   }
 
   _setStatus(text) {
@@ -544,6 +582,118 @@ export class CallManager {
     t.textContent = msg;
     document.body.append(t);
     setTimeout(() => t.remove(), 2600);
+  }
+
+  _initWhiteboard() {
+    const wrap = this.overlay.querySelector('.call-canvas-wrapper');
+    const canvas = wrap.querySelector('.call-canvas-el');
+    const ctx = canvas.getContext('2d');
+
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+    };
+    resize();
+    setTimeout(resize, 200);
+
+    let drawing = false;
+    let lastX = 0;
+    let lastY = 0;
+    let color = '#000000';
+    let thickness = 3;
+
+    wrap.querySelectorAll('.canvas-color').forEach((btn) => {
+      btn.onclick = () => { color = btn.getAttribute('data-color'); };
+    });
+
+    wrap.querySelector('.canvas-clear').onclick = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (this.socket && this.socket.connected) {
+        this.socket.emit('call:canvas-clear', { to: this.peer.id });
+      }
+    };
+
+    const drawLine = (x1, y1, x2, y2, strokeColor, size, broadcast = true) => {
+      ctx.beginPath();
+      ctx.strokeStyle = strokeColor;
+      ctx.lineWidth = size;
+      ctx.moveTo(x1 * canvas.width, y1 * canvas.height);
+      ctx.lineTo(x2 * canvas.width, y2 * canvas.height);
+      ctx.stroke();
+
+      if (broadcast && this.socket && this.socket.connected) {
+        this.socket.emit('call:canvas-draw', {
+          to: this.peer.id,
+          data: { x1, y1, x2, y2, color: strokeColor, thickness: size }
+        });
+      }
+    };
+
+    canvas.onmousedown = (e) => {
+      drawing = true;
+      const rect = canvas.getBoundingClientRect();
+      lastX = (e.clientX - rect.left) / rect.width;
+      lastY = (e.clientY - rect.top) / rect.height;
+    };
+
+    canvas.onmousemove = (e) => {
+      if (!drawing) return;
+      const rect = canvas.getBoundingClientRect();
+      const currX = (e.clientX - rect.left) / rect.width;
+      const currY = (e.clientY - rect.top) / rect.height;
+      drawLine(lastX, lastY, currX, currY, color, thickness, true);
+      lastX = currX;
+      lastY = currY;
+    };
+
+    canvas.onmouseup = () => { drawing = false; };
+    canvas.onmouseleave = () => { drawing = false; };
+
+    canvas.ontouchstart = (e) => {
+      if (e.touches.length !== 1) return;
+      drawing = true;
+      const rect = canvas.getBoundingClientRect();
+      lastX = (e.touches[0].clientX - rect.left) / rect.width;
+      lastY = (e.touches[0].clientY - rect.top) / rect.height;
+      e.preventDefault();
+    };
+
+    canvas.ontouchmove = (e) => {
+      if (!drawing || e.touches.length !== 1) return;
+      const rect = canvas.getBoundingClientRect();
+      const currX = (e.touches[0].clientX - rect.left) / rect.width;
+      const currY = (e.touches[0].clientY - rect.top) / rect.height;
+      drawLine(lastX, lastY, currX, currY, color, thickness, true);
+      lastX = currX;
+      lastY = currY;
+      e.preventDefault();
+    };
+
+    canvas.ontouchend = (e) => { drawing = false; e.preventDefault(); };
+
+    this.whiteboardCtx = ctx;
+    this.whiteboardCanvas = canvas;
+    this.whiteboardDrawLine = drawLine;
+  }
+
+  _onCanvasDraw({ from, data }) {
+    const wrap = this.overlay.querySelector('.call-canvas-wrapper');
+    if (wrap.style.display !== 'block') {
+      wrap.style.display = 'block';
+      this._initWhiteboard();
+    }
+    if (this.whiteboardDrawLine) {
+      this.whiteboardDrawLine(data.x1, data.y1, data.x2, data.y2, data.color, data.thickness, false);
+    }
+  }
+
+  _onCanvasClear({ from }) {
+    if (this.whiteboardCanvas && this.whiteboardCtx) {
+      this.whiteboardCtx.clearRect(0, 0, this.whiteboardCanvas.width, this.whiteboardCanvas.height);
+    }
   }
 
   _initWatchParty(videoId, isInitiator) {

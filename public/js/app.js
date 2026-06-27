@@ -31,6 +31,7 @@ const state = {
   iceServers: null,
   composerMentions: new Map(), // displayName -> userId, for the current draft
   pendingAnswerCallId: null,
+  ghostModeActive: false,
 };
 window.state = state;
 
@@ -378,6 +379,28 @@ function connectSocket() {
     renderChatList();
   });
 
+  socket.on('message:ghost-burn', ({ messageId, chatId }) => {
+    const list = state.messages.get(chatId);
+    if (list) {
+      const idx = list.findIndex((x) => x.id === messageId);
+      if (idx !== -1) list.splice(idx, 1);
+    }
+    if (chatId === state.activeChatId) {
+      const bubble = document.querySelector(`[data-mid="${messageId}"]`);
+      if (bubble) {
+        bubble.style.transition = 'opacity 0.8s ease-out, transform 0.8s ease-out';
+        bubble.style.opacity = '0';
+        bubble.style.transform = 'scale(0.8) translateY(-10px)';
+        setTimeout(() => {
+          renderMessages(true);
+        }, 800);
+      } else {
+        renderMessages(true);
+      }
+    }
+    renderChatList();
+  });
+
   socket.on('message:edited', ({ messageId, chatId, body, encrypted, editedAt }) => {
     const list = state.messages.get(chatId);
     const m = list && list.find((x) => x.id === messageId);
@@ -389,6 +412,19 @@ function connectSocket() {
     }
     if (chatId === state.activeChatId) renderMessages(true);
     renderChatList();
+  });
+
+  socket.on('task:new', ({ chatId, task }) => {
+    if (state.activeChatId === chatId) {
+      toast(`📋 Nova tarefa: "${task.title}"`);
+    }
+  });
+
+  socket.on('task:updated', ({ chatId, task }) => {
+    if (state.activeChatId === chatId) {
+      const status = task.completed ? 'concluída ✅' : 'reaberta';
+      toast(`📋 Tarefa "${task.title}" foi ${status}`);
+    }
   });
 
   socket.on('audio:transcribed', ({ messageId, chatId, transcription }) => {
@@ -678,6 +714,8 @@ async function loadChats() {
 async function openChat(chatId) {
   state.activeChatId = chatId;
   state.replyTo = null;
+  state.ghostModeActive = false;
+  updateComposerPlaceholder();
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
   $('#reply-preview').classList.add('hidden');
@@ -1087,7 +1125,48 @@ function renderMessages(keepScroll) {
       }
     }
 
+    if (m._timerInterval) {
+      clearInterval(m._timerInterval);
+      m._timerInterval = null;
+    }
+
+    let ghostTimerEl = null;
+    if (m.ghostTtl && m.ghostTtl > 0 && !m.deleted) {
+      const isRead = !mine || (m.readBy && m.readBy.length > 0);
+      ghostTimerEl = el('span', { class: 'ghost-timer', style: 'margin-right: 6px; font-weight: bold; color: var(--accent); cursor: default;' });
+      
+      if (isRead) {
+        if (!m._readAt) m._readAt = Date.now();
+        const elapsed = (Date.now() - m._readAt) / 1000;
+        const remaining = Math.max(0, m.ghostTtl - elapsed);
+        
+        let secondsLeft = Math.ceil(remaining);
+        ghostTimerEl.textContent = `👻 ${secondsLeft}s`;
+        
+        const interval = setInterval(() => {
+          secondsLeft--;
+          if (secondsLeft <= 0) {
+            clearInterval(interval);
+            ghostTimerEl.textContent = `👻 0s`;
+            const bubble = container.querySelector(`[data-mid="${m.id}"]`);
+            if (bubble) {
+              bubble.style.transition = 'opacity 0.8s ease-out, transform 0.8s ease-out';
+              bubble.style.opacity = '0';
+              bubble.style.transform = 'scale(0.8) translateY(-10px)';
+            }
+          } else {
+            ghostTimerEl.textContent = `👻 ${secondsLeft}s`;
+          }
+        }, 1000);
+        m._timerInterval = interval;
+      } else {
+        ghostTimerEl.textContent = '👻';
+        ghostTimerEl.title = 'Mensagem fantasma (aguardando leitura)';
+      }
+    }
+
     const meta = el('div', { class: 'msg-meta' },
+      ghostTimerEl || '',
       m.starred && !m.deleted ? el('span', { class: 'star-label', title: 'Favorita' }, '★') : '',
       m.editedAt && !m.deleted ? el('span', { class: 'edited-label' }, 'editada') : '',
       fmtTime(m.createdAt),
@@ -1114,6 +1193,7 @@ function renderMessages(keepScroll) {
       m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, m.starred ? '★' : '☆'),
       m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
       canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, '📌') : '',
+      m.deleted ? '' : el('button', { title: 'Criar Tarefa', onclick: () => createTaskFromMessage(m) }, '📋'),
       mine && !m.deleted && m.type === 'text'
         ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
       mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, '🗑') : '');
@@ -1605,6 +1685,7 @@ async function sendMessage() {
 
   const chat = state.chats.get(state.activeChatId);
   const payload = { chatId: state.activeChatId, body, type: 'text' };
+  if (state.ghostModeActive) payload.ghostTtl = 15;
   if (state.replyTo) payload.replyTo = state.replyTo.id;
 
   // Group @mentions.
@@ -1826,6 +1907,7 @@ async function deliverMedia({ file, type, mediaName }) {
       mediaName: mediaName || up.name,
       mediaMime: up.mime,
       replyTo: state.replyTo ? state.replyTo.id : undefined,
+      ghostTtl: state.ghostModeActive ? 15 : undefined,
     });
     return;
   }
@@ -1910,6 +1992,14 @@ function setupComposer() {
     menu.append(item('📊 Enquete', () => pollComposeModal()));
     menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
     menu.append(item('📅 Mensagens agendadas', () => showScheduledMessagesModal()));
+
+    const ghostLabel = state.ghostModeActive ? '👻 Desativar Modo Fantasma' : '👻 Ativar Modo Fantasma';
+    menu.append(item(ghostLabel, () => {
+      state.ghostModeActive = !state.ghostModeActive;
+      updateComposerPlaceholder();
+      toast(state.ghostModeActive ? '👻 Modo Fantasma Ativado! (mensagem some em 15s após visualizada)' : '👻 Modo Fantasma Desativado');
+    }));
+
     document.body.append(menu);
     const r = e.currentTarget.getBoundingClientRect();
     menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
@@ -1917,6 +2007,20 @@ function setupComposer() {
     const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
     setTimeout(() => document.addEventListener('click', close), 0);
   };
+
+  function updateComposerPlaceholder() {
+    const input = $('#message-input');
+    if (!input) return;
+    if (state.ghostModeActive) {
+      input.placeholder = '👻 Mensagem Fantasma (some em 15s)...';
+      input.style.border = '1px dashed var(--accent)';
+      input.style.boxShadow = '0 0 8px rgba(138, 43, 226, 0.4)';
+    } else {
+      input.placeholder = 'Mensagem';
+      input.style.border = '';
+      input.style.boxShadow = '';
+    }
+  }
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
@@ -1934,6 +2038,7 @@ function setupComposer() {
   $('#chat-header-info').onclick = showChatInfo;
   $('#call-audio-btn').onclick = () => startCall('audio');
   $('#call-video-btn').onclick = () => startCall('video');
+  $('#tasks-btn').onclick = showTasksModal;
   $('#mic-btn').onclick = toggleVoiceRecording;
   $('#unblock-btn').onclick = async () => {
     const chat = state.chats.get(state.activeChatId);
@@ -3626,6 +3731,149 @@ async function boot() {
       window.addEventListener('focus', () => reg.update().catch(() => {}));
     }).catch(() => {});
   }
+}
+
+async function showTasksModal() {
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat) return;
+
+  const content = el('div', { class: 'modal-body', style: 'max-height: 480px; overflow-y: auto;' });
+  const footer = el('div', { class: 'modal-footer', style: 'display:flex; gap:8px;' });
+
+  const renderTaskList = async () => {
+    content.innerHTML = '';
+    try {
+      const { tasks } = await api.listTasks(chat.id);
+      if (tasks.length === 0) {
+        content.append(el('p', { style: 'text-align:center; color:var(--text-2); padding:20px;' }, 'Nenhuma tarefa criada para este chat ainda.'));
+      } else {
+        const list = el('div', { style: 'display:flex; flex-direction:column; gap:10px;' });
+        for (const t of tasks) {
+          const assignee = chat.members ? chat.members.find((m) => m.id === t.assignee_id) : null;
+          const assigneeName = assignee ? assignee.displayName : 'Não atribuído';
+          
+          const checkbox = el('input', { type: 'checkbox', checked: t.completed ? '' : null, style: 'cursor:pointer; width:18px; height:18px;' });
+          checkbox.onchange = async () => {
+            await api.updateTask(chat.id, t.id, { completed: checkbox.checked });
+            toast(checkbox.checked ? 'Tarefa concluída! 🎉' : 'Tarefa reaberta');
+            renderTaskList();
+          };
+
+          const taskTitle = el('span', {
+            style: `font-size:15px; font-weight:500; cursor:pointer; flex:1; ${t.completed ? 'text-decoration:line-through; color:var(--text-2);' : ''}`
+          }, t.title);
+          
+          taskTitle.onclick = () => {
+            checkbox.checked = !checkbox.checked;
+            checkbox.dispatchEvent(new Event('change'));
+          };
+
+          const metaInfo = el('div', { style: 'font-size:12px; color:var(--text-2); margin-top:2px;' },
+            `Responsável: ${assigneeName}` + (t.due_date ? ` · Prazo: ${new Date(t.due_date).toLocaleDateString()}` : '')
+          );
+
+          const taskRow = el('div', {
+            style: 'display:flex; align-items:flex-start; gap:12px; padding:10px; border-radius:8px; background:var(--panel-3); border-left:4px solid ' + (t.completed ? 'var(--success)' : 'var(--accent)')
+          },
+            checkbox,
+            el('div', { style: 'flex:1; display:flex; flex-direction:column;' }, taskTitle, metaInfo)
+          );
+          list.append(taskRow);
+        }
+        content.append(list);
+      }
+    } catch (err) {
+      content.append(el('p', { class: 'auth-error' }, 'Erro ao carregar tarefas: ' + err.message));
+    }
+  };
+
+  const addBtn = el('button', { class: 'btn-primary', style: 'flex:1; margin:0;' }, '＋ Nova Tarefa');
+  addBtn.onclick = () => {
+    const titleInput = el('input', { class: 'select-input', type: 'text', placeholder: 'Título da tarefa', style: 'margin-bottom:10px' });
+    const assigneeSelect = el('select', { class: 'select-input', style: 'margin-bottom:10px' },
+      el('option', { value: '' }, 'Sem responsável'));
+    if (chat.members) {
+      for (const m of chat.members) {
+        assigneeSelect.append(el('option', { value: m.id }, m.displayName));
+      }
+    }
+    const dueDateInput = el('input', { class: 'select-input', type: 'date', style: 'margin-bottom:10px' });
+    const err = el('div', { class: 'auth-error' });
+    const save = el('button', { class: 'btn-primary', style: 'width:100%' }, 'Adicionar');
+
+    const body = el('div', { class: 'modal-body' }, titleInput, assigneeSelect, dueDateInput, err, save);
+    const addBd = modalShell('Nova Tarefa', body);
+
+    save.onclick = async () => {
+      const title = titleInput.value.trim();
+      if (!title) { err.textContent = 'O título é obrigatório.'; return; }
+      try {
+        await api.createTask(chat.id, {
+          title,
+          assigneeId: assigneeSelect.value || null,
+          dueDate: dueDateInput.value ? new Date(dueDateInput.value).getTime() : null
+        });
+        addBd.remove();
+        renderTaskList();
+      } catch (e) {
+        err.textContent = e.message;
+      }
+    };
+  };
+
+  footer.append(addBtn);
+  const bd = modalShell('📋 Tarefas Coletivas', content, footer);
+  await renderTaskList();
+}
+
+function createTaskFromMessage(m) {
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat) return;
+
+  const titleInput = el('input', { class: 'select-input', type: 'text', value: m._plain || m.body || '', placeholder: 'Título da tarefa', style: 'margin-bottom:10px' });
+  
+  const assigneeSelect = el('select', { class: 'select-input', style: 'margin-bottom:10px' },
+    el('option', { value: '' }, 'Sem responsável (Não atribuído)'));
+  if (chat.members) {
+    for (const member of chat.members) {
+      assigneeSelect.append(el('option', { value: member.id }, member.displayName));
+    }
+  }
+
+  const dueDateInput = el('input', { class: 'select-input', type: 'date', style: 'margin-bottom:10px' });
+
+  const err = el('div', { class: 'auth-error' });
+  const save = el('button', { class: 'btn-primary', style: 'width:100%' }, '📋 Criar Tarefa');
+
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint', style: 'margin-top:0' }, 'Transforme esta mensagem em uma tarefa colaborativa para o grupo.'),
+    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Título'),
+    titleInput,
+    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Responsável'),
+    assigneeSelect,
+    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Prazo de entrega'),
+    dueDateInput,
+    err, save);
+  const bd = modalShell('📋 Criar Tarefa', body);
+
+  save.onclick = async () => {
+    const title = titleInput.value.trim();
+    if (!title) { err.textContent = 'O título é obrigatório.'; return; }
+    
+    try {
+      const dueDateVal = dueDateInput.value ? new Date(dueDateInput.value).getTime() : null;
+      await api.createTask(chat.id, {
+        title,
+        messageId: m.id,
+        assigneeId: assigneeSelect.value || null,
+        dueDate: dueDateVal
+      });
+      bd.remove();
+      toast('Tarefa criada! ✅');
+    } catch (e) {
+      err.textContent = e.message || 'Falha ao criar tarefa';
+    }
+  };
 }
 
 boot();
