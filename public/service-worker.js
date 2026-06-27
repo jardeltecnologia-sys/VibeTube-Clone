@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v45';
+const CACHE = 'speedvox-shell-v46';
 const SHELL = [
   '/',
   '/index.html',
@@ -102,7 +102,9 @@ self.addEventListener('notificationclick', (event) => {
           return client.focus();
         }
       }
-      return self.clients.openWindow(`/${chatId && !answering ? `?chat=${chatId}` : ''}`);
+      return self.clients.openWindow(
+        answering ? `/?action=answer&callId=${callId}` : `/${chatId ? `?chat=${chatId}` : ''}`
+      );
     })
   );
 });

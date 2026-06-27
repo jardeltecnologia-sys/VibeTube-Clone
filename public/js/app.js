@@ -30,7 +30,9 @@ const state = {
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
   iceServers: null,
   composerMentions: new Map(), // displayName -> userId, for the current draft
+  pendingAnswerCallId: null,
 };
+window.state = state;
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel) => document.querySelector(sel);
@@ -3369,11 +3371,17 @@ async function boot() {
     }
   }
 
-  // Open the right chat when a notification is tapped.
+  // Open the right chat or answer a call when a notification is tapped.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (e) => {
       if (e.data && e.data.type === 'open-chat' && e.data.chatId && state.chats.has(e.data.chatId)) {
         openChat(e.data.chatId);
+      }
+      if (e.data && e.data.type === 'answer-call' && e.data.callId) {
+        state.pendingAnswerCallId = e.data.callId;
+        if (state.calls && state.calls.callId === e.data.callId && state.calls.role === 'callee') {
+          state.calls._accept();
+        }
       }
     });
   }
@@ -3384,6 +3392,12 @@ async function boot() {
       if (state.chats.has(chatParam)) { clearInterval(tryOpen); openChat(chatParam); }
     }, 300);
     setTimeout(() => clearInterval(tryOpen), 6000);
+  }
+  const actionParam = new URLSearchParams(location.search).get('action');
+  const callIdParam = new URLSearchParams(location.search).get('callId');
+  if (actionParam === 'answer' && callIdParam) {
+    history.replaceState(null, '', location.pathname);
+    state.pendingAnswerCallId = callIdParam;
   }
   // Public invite deep link: ?u=username opens a chat with that person.
   const userParam = new URLSearchParams(location.search).get('u');

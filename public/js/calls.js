@@ -295,6 +295,11 @@ export class CallManager {
     this._showOverlay('incoming');
     this._setStatus(media === 'video' ? 'Chamada de vídeo recebida' : 'Chamada recebida');
     ringtone.startIncoming();
+
+    if (window.state && window.state.pendingAnswerCallId === callId) {
+      window.state.pendingAnswerCallId = null;
+      this._accept();
+    }
   }
 
   async _accept() {
