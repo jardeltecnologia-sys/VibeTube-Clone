@@ -222,6 +222,7 @@ ensureColumn('messages', 'mentions', 'mentions TEXT');
 // Scheduled messages: when set and in the future, the message is held back
 // (invisible) until the sweeper delivers it.
 ensureColumn('messages', 'send_at', 'send_at INTEGER');
-ensureColumn('users', 'virtual_number', 'virtual_number TEXT UNIQUE');
+ensureColumn('users', 'virtual_number', 'virtual_number TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_virtual_number ON users(virtual_number)');
 
 module.exports = db;
