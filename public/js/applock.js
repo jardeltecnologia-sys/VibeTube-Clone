@@ -36,12 +36,25 @@ export async function enable(pin, { biometric = false } = {}) {
   const salt = randHex(16);
   const hash = await hashPin(pin, salt);
   const cur = load() || {};
-  store({ salt, hash, biometric, credId: biometric ? cur.credId : undefined, at: Date.now() });
+  store({ salt, hash, biometric, credId: biometric ? cur.credId : undefined, at: Date.now(), panicSalt: cur.panicSalt, panicHash: cur.panicHash });
+}
+export async function enablePanic(pin) {
+  const salt = randHex(16);
+  const hash = await hashPin(pin, salt);
+  const cur = load() || {};
+  cur.panicSalt = salt;
+  cur.panicHash = hash;
+  store(cur);
 }
 export function disable() { wipe(); }
 export async function verifyPin(pin) {
-  const c = load(); if (!c) return true;
-  return (await hashPin(pin, c.salt)) === c.hash;
+  const c = load(); if (!c) return 'real';
+  const isReal = (await hashPin(pin, c.salt)) === c.hash;
+  if (isReal) return 'real';
+  if (c.panicHash && (await hashPin(pin, c.panicSalt)) === c.panicHash) {
+    return 'panic';
+  }
+  return false;
 }
 
 // ---- Biometria (WebAuthn / digital do aparelho) ----
@@ -113,8 +126,26 @@ function buildOverlay(onUnlock) {
   function done() { ov.remove(); armAutoLock(); onUnlock(); }
 
   async function tryPin() {
-    if (await verifyPin(input.value)) { done(); }
-    else { err.textContent = 'PIN incorreto'; input.value = ''; input.focus(); }
+    const res = await verifyPin(input.value);
+    if (res === 'real') {
+      done();
+    } else if (res === 'panic') {
+      localStorage.setItem('speedvox_panic_active', '1');
+      localStorage.removeItem('speedvox_identity');
+      localStorage.removeItem('speedvox_me');
+      localStorage.removeItem('speedvox_chats');
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith('speedvox_ratchet_')) {
+          localStorage.removeItem(k);
+          i--;
+        }
+      }
+      done();
+      location.reload();
+    } else {
+      err.textContent = 'PIN incorreto'; input.value = ''; input.focus();
+    }
   }
   unlockBtn.addEventListener('click', tryPin);
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryPin(); });

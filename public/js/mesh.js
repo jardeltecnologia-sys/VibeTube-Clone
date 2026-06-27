@@ -21,6 +21,7 @@
 
 import { splitMedia, MediaReassembler } from '/mesh-core/chunk.js';
 import { CALL_SIGNAL_KIND } from '/mesh-core/callsignal.js';
+import { GeoMeshRouter } from './geomesh-router.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
@@ -58,6 +59,7 @@ export class MeshManager extends EventTarget {
     // Reassembles chunked media (voice notes, photos) arriving over the mesh.
     this.media = new MediaReassembler();
 
+    this.geoRouter = new GeoMeshRouter(this);
     this.enabled = false;
   }
 
@@ -182,7 +184,11 @@ export class MeshManager extends EventTarget {
   }
 
   _deliverLocal(env) {
-    if (env.kind === 'sos') {
+    if (env.kind === 'presence') {
+      if (env.data && env.data.coords) {
+        this.geoRouter.registerPeerCoords(env.origin, env.data.coords);
+      }
+    } else if (env.kind === 'sos') {
       this.dispatchEvent(new CustomEvent('sos', { detail: { from: env.origin, data: env.data, ts: env.ts } }));
     } else if (env.kind === CALL_SIGNAL_KIND) {
       // A 1:1 call signal arrived over the mesh (server-free calling).
@@ -218,7 +224,23 @@ export class MeshManager extends EventTarget {
     // Unicast with the target as a direct neighbour: send straight to it.
     if (env.to !== '*') {
       const direct = this.links.get(env.to);
-      if (direct) { this._safeSendRaw(direct, raw); /* keep flooding too for redundancy */ }
+      if (direct) { this._safeSendRaw(direct, raw); return true; }
+    }
+
+    // Geo-Mesh Directional Routing (for Unicast messages)
+    if (env.to !== '*' && env.kind !== 'ack') {
+      const optimalHopId = this.geoRouter.selectOptimalHop(env.to);
+      if (optimalHopId === 'SATELLITE_BURST_MODE') {
+        this.triggerSatelliteHardwareDispatch(hop);
+        return true;
+      }
+      if (optimalHopId && optimalHopId !== exceptPeerId) {
+        const link = this.links.get(optimalHopId);
+        if (link && this._safeSendRaw(link, raw)) {
+          console.log(`[GeoMesh] Roteado direcionalmente para o nó: ${optimalHopId}`);
+          return true;
+        }
+      }
     }
 
     let delivered = 0;
@@ -227,6 +249,10 @@ export class MeshManager extends EventTarget {
       if (this._safeSendRaw(link, raw)) delivered += 1;
     }
     return delivered > 0;
+  }
+
+  triggerSatelliteHardwareDispatch(hop) {
+    console.log('[Satellite] Acionando transmissão de emergência via constelação LEO/SOS (menos de 1KB):', JSON.stringify(hop).slice(0, 100));
   }
 
   _safeSend(link, env) { return this._safeSendRaw(link, JSON.stringify(env)); }

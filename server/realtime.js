@@ -86,6 +86,9 @@ function setup(httpServer) {
     }
   }
 
+  const audioService = require('./utils/audioService');
+  audioService.setSocketIo(io, emitToChat);
+
   // Finalize a call: record it as a message in the 1:1 chat (history) and, for a
   // missed/rejected call, push the callee. status: completed|missed|rejected|canceled.
   function logCall(callId, status) {
@@ -354,6 +357,12 @@ function setup(httpServer) {
 
         emitToChat(chatId, 'message:new', { message, clientId });
 
+        if (msgType === 'audio' && mediaUrl) {
+          const path = require('path');
+          const filename = path.basename(mediaUrl);
+          audioService.transcribeAndSummarize(msgId, filename).catch(() => {});
+        }
+
         // Push an updated chat summary to every member's sidebar.
         for (const memberId of getMemberIds(chatId)) {
           io.to(`user:${memberId}`).emit('chat:update', getChatSummary(chatId, memberId));
@@ -504,6 +513,11 @@ function setup(httpServer) {
     socket.on('mesh:signal', ({ to, signal }) => {
       if (!to) return;
       io.to(`user:${to}`).emit('mesh:signal', { from: userId, signal });
+    });
+
+    socket.on('call:watchparty', ({ to, payload }) => {
+      if (!to) return;
+      io.to(`user:${to}`).emit('call:watchparty', { from: userId, payload });
     });
 
     // --- Voice / video call signaling (1:1 WebRTC) ---

@@ -50,6 +50,7 @@ export class CallManager {
     s.on('call:sdp', (d) => this._onSdp(d));
     s.on('call:ice', (d) => this._onIce(d));
     s.on('call:ended', (d) => this._onEnded(d));
+    s.on('call:watchparty', (d) => this._onWatchParty(d));
   }
 
   // Send a call signal. When the server is reachable, behaves EXACTLY like
@@ -84,7 +85,45 @@ export class CallManager {
 
   async _ensureMedia() {
     if (this.localStream) return this.localStream;
-    this.localStream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
+    let stream = await navigator.mediaDevices.getUserMedia(mediaConstraints(this.media));
+
+    const noiseSuppression = localStorage.getItem('speedvox_noise_suppression') === '1';
+    const audioTrack = stream.getAudioTracks()[0];
+    if (noiseSuppression && audioTrack) {
+      try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioCtx.createMediaStreamSource(stream);
+
+        const filter = audioCtx.createBiquadFilter();
+        filter.type = 'highpass';
+        filter.frequency.value = 85;
+
+        const gate = audioCtx.createDynamicsCompressor();
+        gate.threshold.value = -45;
+        gate.knee.value = 5;
+        gate.ratio.value = 18;
+        gate.attack.value = 0.005;
+        gate.release.value = 0.15;
+
+        const dest = audioCtx.createMediaStreamDestination();
+
+        source.connect(filter);
+        filter.connect(gate);
+        gate.connect(dest);
+
+        const cleanAudioTrack = dest.stream.getAudioTracks()[0];
+        const tracks = [cleanAudioTrack];
+        const videoTrack = stream.getVideoTracks()[0];
+        if (videoTrack) tracks.push(videoTrack);
+
+        this.noiseAudioContext = audioCtx;
+        stream = new MediaStream(tracks);
+      } catch (err) {
+        console.warn('Falha ao inicializar Limpeza de Ruído via Web Audio:', err);
+      }
+    }
+
+    this.localStream = stream;
     this.localVideo.srcObject = this.localStream;
     return this.localStream;
   }
@@ -379,6 +418,11 @@ export class CallManager {
       this.localStream.getTracks().forEach((t) => t.stop());
       this.localStream = null;
     }
+    if (this.noiseAudioContext) {
+      try { this.noiseAudioContext.close(); } catch {}
+      this.noiseAudioContext = null;
+    }
+    this._stopWatchParty(false);
     this.pendingIce = [];
     this.callId = null;
     this.peer = null;
@@ -408,6 +452,9 @@ export class CallManager {
     o.innerHTML = `
       <video class="call-remote" autoplay playsinline></video>
       <video class="call-local" autoplay playsinline muted></video>
+      <div class="call-yt-wrapper" style="display:none; width: 90%; max-width: 480px; margin: 10px auto; border-radius: 12px; overflow: hidden; background: #000; aspect-ratio: 16/9; position: relative; z-index: 10;">
+        <div id="yt-player-target"></div>
+      </div>
       <div class="call-info">
         <div class="call-avatar"></div>
         <div class="call-name"></div>
@@ -416,6 +463,7 @@ export class CallManager {
       <div class="call-controls">
         <button class="call-btn mute" title="Mudo">🎙️</button>
         <button class="call-btn cam" title="Câmera">🎥</button>
+        <button class="call-btn watchparty" title="Watch Party" style="display:none;">📺</button>
         <button class="call-btn accept" title="Atender">📞</button>
         <button class="call-btn hangup" title="Encerrar">📵</button>
       </div>`;
@@ -425,6 +473,7 @@ export class CallManager {
     this.localVideo = o.querySelector('.call-local');
     this.btnMute = o.querySelector('.mute');
     this.btnCam = o.querySelector('.cam');
+    this.btnWatchParty = o.querySelector('.watchparty');
     this.btnAccept = o.querySelector('.accept');
     this.btnHangup = o.querySelector('.hangup');
 
@@ -443,6 +492,29 @@ export class CallManager {
       const track = this.localStream.getVideoTracks()[0];
       if (track) { track.enabled = !track.enabled; this.btnCam.classList.toggle('off', !track.enabled); }
     };
+    this.btnWatchParty.onclick = () => {
+      const wrap = this.overlay.querySelector('.call-yt-wrapper');
+      if (wrap.style.display === 'block') {
+        if (confirm('Encerrar a Watch Party atual?')) {
+          this._stopWatchParty(true);
+        }
+      } else {
+        const url = prompt('Cole o link de um vídeo do YouTube:');
+        if (!url) return;
+        let videoId = '';
+        const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|\&v=)([^#\&\?]*).*/;
+        const match = url.match(regExp);
+        if (match && match[2].length === 11) {
+          videoId = match[2];
+        }
+        if (videoId) {
+          this._initWatchParty(videoId, true);
+          this._sendWatchPartyEvent({ action: 'start', videoId });
+        } else {
+          alert('Link do YouTube inválido.');
+        }
+      }
+    };
   }
 
   _showOverlay(phase) {
@@ -459,6 +531,7 @@ export class CallManager {
     this.overlay.querySelector('.call-name').textContent = this.peer.displayName || '';
     this.btnAccept.style.display = phase === 'incoming' ? '' : 'none';
     this.btnCam.style.display = this.media === 'video' ? '' : 'none';
+    this.btnWatchParty.style.display = phase === 'active' ? '' : 'none';
   }
 
   _setStatus(text) {
@@ -471,5 +544,145 @@ export class CallManager {
     t.textContent = msg;
     document.body.append(t);
     setTimeout(() => t.remove(), 2600);
+  }
+
+  _initWatchParty(videoId, isInitiator) {
+    const wrap = this.overlay.querySelector('.call-yt-wrapper');
+    wrap.style.display = 'block';
+
+    const loadYT = () => {
+      if (this.ytPlayer) {
+        this.ytPlayer.loadVideoById(videoId);
+        return;
+      }
+      const div = document.createElement('div');
+      div.id = 'yt-player-target';
+      wrap.innerHTML = '';
+      wrap.appendChild(div);
+
+      this.ytPlayer = new YT.Player('yt-player-target', {
+        height: '100%',
+        width: '100%',
+        videoId: videoId,
+        playerVars: {
+          autoplay: 1,
+          controls: isInitiator ? 1 : 0,
+          disablekb: 1,
+          fs: 0,
+          modestbranding: 1,
+          rel: 0
+        },
+        events: {
+          onReady: (e) => {
+            e.target.playVideo();
+            this._startAudioDucking();
+          },
+          onStateChange: (e) => {
+            if (!isInitiator) return;
+            if (e.data === YT.PlayerState.PLAYING) {
+              this._sendWatchPartyEvent({ action: 'play' });
+            } else if (e.data === YT.PlayerState.PAUSED) {
+              this._sendWatchPartyEvent({ action: 'pause', time: e.target.getCurrentTime() });
+            }
+          }
+        }
+      });
+    };
+
+    if (window.YT && window.YT.Player) {
+      loadYT();
+    } else {
+      window.onYouTubeIframeAPIReady = loadYT;
+      const tag = document.createElement('script');
+      tag.src = 'https://www.youtube.com/iframe_api';
+      const first = document.getElementsByTagName('script')[0];
+      first.parentNode.insertBefore(tag, first);
+    }
+  }
+
+  _sendWatchPartyEvent(payload) {
+    if (this.socket && this.socket.connected) {
+      this.socket.emit('call:watchparty', { to: this.peer.id, payload });
+    }
+  }
+
+  _onWatchParty({ from, payload }) {
+    if (payload.action === 'start') {
+      this._initWatchParty(payload.videoId, false);
+    } else if (payload.action === 'play') {
+      if (this.ytPlayer) this.ytPlayer.playVideo();
+    } else if (payload.action === 'pause') {
+      if (this.ytPlayer) {
+        this.ytPlayer.pauseVideo();
+        if (payload.time != null) this.ytPlayer.seekTo(payload.time, true);
+      }
+    } else if (payload.action === 'seek') {
+      if (this.ytPlayer && payload.time != null) this.ytPlayer.seekTo(payload.time, true);
+    } else if (payload.action === 'stop') {
+      this._stopWatchParty(false);
+    }
+  }
+
+  _stopWatchParty(notifyPeer = true) {
+    const wrap = this.overlay.querySelector('.call-yt-wrapper');
+    wrap.style.display = 'none';
+    wrap.innerHTML = '<div id="yt-player-target"></div>';
+    if (this.ytPlayer) {
+      try { this.ytPlayer.destroy(); } catch {}
+      this.ytPlayer = null;
+    }
+    this._stopAudioDucking();
+    if (notifyPeer) {
+      this._sendWatchPartyEvent({ action: 'stop' });
+    }
+  }
+
+  _startAudioDucking() {
+    this._stopAudioDucking();
+    try {
+      const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+
+      if (this.remoteVideo.srcObject) {
+        const source = audioCtx.createMediaStreamSource(this.remoteVideo.srcObject);
+        source.connect(analyser);
+      }
+
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+
+      this.duckingAudioContext = audioCtx;
+
+      this.duckingInterval = setInterval(() => {
+        if (!this.ytPlayer || typeof this.ytPlayer.setVolume !== 'function') return;
+
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < bufferLength; i++) {
+          sum += dataArray[i];
+        }
+        const average = sum / bufferLength;
+
+        if (average > 12) {
+          this.ytPlayer.setVolume(20);
+        } else {
+          this.ytPlayer.setVolume(85);
+        }
+      }, 300);
+    } catch (err) {
+      console.warn('Falha ao configurar ducking de áudio:', err);
+    }
+  }
+
+  _stopAudioDucking() {
+    if (this.duckingInterval) {
+      clearInterval(this.duckingInterval);
+      this.duckingInterval = null;
+    }
+    if (this.duckingAudioContext) {
+      try { this.duckingAudioContext.close(); } catch {}
+      this.duckingAudioContext = null;
+    }
   }
 }

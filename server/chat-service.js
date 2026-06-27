@@ -106,6 +106,10 @@ function serializeMessage(row) {
     .prepare('SELECT user_id FROM receipts WHERE message_id = ?')
     .all(row.id)
     .map((r) => r.user_id);
+  const transcriptionRow = row.type === 'audio' && !row.deleted
+    ? db.prepare('SELECT transcript, summary FROM audio_transcriptions WHERE message_id = ?').get(row.id)
+    : null;
+
   return {
     id: row.id,
     chatId: row.chat_id,
@@ -125,6 +129,10 @@ function serializeMessage(row) {
     sendAt: row.send_at || null,
     deleted: Boolean(row.deleted),
     poll: row.type === 'poll' && !row.deleted ? serializePoll(row) : null,
+    transcription: transcriptionRow ? {
+      transcript: transcriptionRow.transcript,
+      summary: transcriptionRow.summary,
+    } : null,
     reactions,
     readBy: readers,
     deliveredTo: delivered,

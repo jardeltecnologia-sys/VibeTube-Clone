@@ -195,6 +195,13 @@ CREATE TABLE IF NOT EXISTS mesh_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_mesh_messages_received ON mesh_messages(received_at);
 CREATE INDEX IF NOT EXISTS idx_mesh_messages_room ON mesh_messages(room_id, received_at);
+
+CREATE TABLE IF NOT EXISTS audio_transcriptions (
+  message_id TEXT PRIMARY KEY,
+  transcript TEXT NOT NULL,
+  summary    TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
 `);
 
 // Migrations for databases created before these columns existed.

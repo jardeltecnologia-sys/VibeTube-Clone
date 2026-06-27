@@ -391,6 +391,15 @@ function connectSocket() {
     renderChatList();
   });
 
+  socket.on('audio:transcribed', ({ messageId, chatId, transcription }) => {
+    const list = state.messages.get(chatId);
+    const m = list && list.find((x) => x.id === messageId);
+    if (m) {
+      m.transcription = transcription;
+    }
+    if (chatId === state.activeChatId) renderMessages(true);
+  });
+
   socket.on('status:update', () => { refreshStatusIndicator(); });
 
   // Mesh signaling relayed through the server.
@@ -1039,8 +1048,26 @@ function renderMessages(keepScroll) {
           parts.push(wrap);
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
-        parts.push(el('div', { class: 'msg-audio' },
-          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' })));
+        const audioNode = el('div', { class: 'msg-audio' },
+          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' }));
+        if (m.transcription) {
+          const transWrap = el('div', { class: 'msg-audio-transcription', style: 'margin-top: 8px; font-size: 13px; border-top: 1px dashed var(--border); padding-top: 8px;' });
+          const toggleBtn = el('button', {
+            style: 'background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 11px; display: flex; align-items: center; gap: 4px; margin-bottom: 6px; font-weight: bold;',
+            onclick: () => {
+              contentWrap.classList.toggle('hidden');
+              toggleBtn.textContent = contentWrap.classList.contains('hidden') ? '📝 Ver Transcrição e Resumo' : '📖 Ocultar Transcrição';
+            }
+          }, '📝 Ver Transcrição e Resumo');
+          const contentWrap = el('div', { class: 'hidden', style: 'display: flex; flex-direction: column; gap: 6px;' });
+          contentWrap.append(
+            el('div', { style: 'font-style: italic; color: var(--text-2); line-height: 1.4;' }, `"${m.transcription.transcript}"`),
+            el('div', { style: 'background: var(--panel-3); padding: 8px; border-radius: 8px; font-size: 12px; line-height: 1.4; color: var(--text-1); border-left: 3px solid var(--accent); white-space: pre-wrap;' }, m.transcription.summary)
+          );
+          transWrap.append(toggleBtn, contentWrap);
+          audioNode.append(transWrap);
+        }
+        parts.push(audioNode);
       } else if (m.type === 'file' && m.mediaUrl) {
         parts.push(el('a', { class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank' },
           el('span', { class: 'file-ic' }, '📄'),
@@ -1525,6 +1552,48 @@ async function sendMessage() {
   const input = $('#message-input');
   const body = input.value.trim();
   if (!body || !state.activeChatId) return;
+
+  if (localStorage.getItem('speedvox_panic_active') === '1') {
+    const msg = {
+      id: `local-fake-${Date.now()}`,
+      chatId: state.activeChatId,
+      senderId: state.me.id,
+      type: 'text',
+      body,
+      createdAt: Date.now(),
+      pending: false
+    };
+    const list = state.messages.get(state.activeChatId) || [];
+    list.push(msg);
+    state.messages.set(state.activeChatId, list);
+    const chat = state.chats.get(state.activeChatId);
+    if (chat) chat.lastMessage = msg;
+    input.value = '';
+    input.style.height = 'auto';
+    renderMessages(true);
+    renderChatList();
+
+    setTimeout(() => {
+      let replyText = 'Beleza!';
+      if (state.activeChatId === 'mock-1') replyText = 'Deus te abençoe, filho!';
+      else if (state.activeChatId === 'mock-2') replyText = 'Tá bom amor. Bjs!';
+      else if (state.activeChatId === 'mock-3') replyText = 'Entendido, obrigado pelo aviso.';
+      const replyMsg = {
+        id: `local-fake-${Date.now()}`,
+        chatId: state.activeChatId,
+        senderId: 'other',
+        type: 'text',
+        body: replyText,
+        createdAt: Date.now(),
+        pending: false
+      };
+      list.push(replyMsg);
+      if (chat) chat.lastMessage = replyMsg;
+      renderMessages(true);
+      renderChatList();
+    }, 1500 + Math.random() * 1500);
+    return;
+  }
 
   // Editing an existing message takes priority over sending a new one.
   if (state.editing) {
@@ -2316,6 +2385,12 @@ async function openAppLockSetup() {
     maxlength: '12', placeholder: 'Novo PIN (mín. 4 dígitos)', style: 'margin-bottom:10px' });
   const pin2 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
     maxlength: '12', placeholder: 'Repita o PIN', style: 'margin-bottom:10px' });
+
+  const panic1 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
+    maxlength: '12', placeholder: 'PIN de Pânico (opcional)', style: 'margin-bottom:10px' });
+  const panic2 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
+    maxlength: '12', placeholder: 'Repita o PIN de Pânico', style: 'margin-bottom:10px' });
+
   const bioAvail = await applock.biometricAvailable();
   const bioChk = el('input', { type: 'checkbox', checked: bioAvail ? '' : null });
   const bioRow = el('label', { style: 'display:flex;align-items:center;gap:8px;margin:4px 0 10px' },
@@ -2327,15 +2402,32 @@ async function openAppLockSetup() {
     el('p', { class: 'auth-hint', style: 'margin-top:0' },
       'Crie um PIN para abrir o SpeedVox. Ele fica guardado só no seu aparelho (em forma cifrada) — nem o servidor sabe seu PIN.'),
     pin1, pin2,
+    el('hr', { style: 'border:0;border-top:1px dashed var(--border);margin:12px 0' }),
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'Opcional: Defina um PIN de Pânico. Se você for obrigado a abrir o app, digite este PIN para simular um cofre falso e apagar os chats reais.'),
+    panic1, panic2,
+    el('hr', { style: 'border:0;border-top:1px dashed var(--border);margin:12px 0' }),
     bioAvail ? bioRow : el('p', { class: 'auth-hint' }, 'Este aparelho não oferece digital pelo navegador; o bloqueio usará o PIN.'),
     err, save);
   const bd = modalShell('🔒 Bloqueio do app', body);
 
   save.onclick = async () => {
     const p = pin1.value.trim();
-    if (!/^\d{4,}$/.test(p)) { err.textContent = 'Use pelo menos 4 dígitos (só números).'; return; }
+    if (!/^\d{4,}$/.test(p)) { err.textContent = 'Use pelo menos 4 dígitos para o PIN (só números).'; return; }
     if (p !== pin2.value.trim()) { err.textContent = 'Os PINs não conferem.'; return; }
+
+    const panic = panic1.value.trim();
+    if (panic) {
+      if (!/^\d{4,}$/.test(panic)) { err.textContent = 'Use pelo menos 4 dígitos para o PIN de Pânico.'; return; }
+      if (panic === p) { err.textContent = 'O PIN de Pânico deve ser DIFERENTE do PIN normal.'; return; }
+      if (panic !== panic2.value.trim()) { err.textContent = 'Os PINs de pânico não conferem.'; return; }
+    }
+
     await applock.enable(p, { biometric: false });
+    if (panic) {
+      await applock.enablePanic(panic);
+    }
+
     if (bioAvail && bioChk.checked) {
       try { await applock.biometricRegister(); } catch { toast('Digital não registrada; vale o PIN.'); }
     }
@@ -2455,6 +2547,12 @@ function settingsModal() {
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Som ao chegar mensagem (app aberto)'),
       boolRow('speedvox_msg_sound', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, '🎙️ Limpeza de Ruído no Microfone (Web Audio)'),
+      boolRow('speedvox_noise_suppression', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, '🎧 Qualidade de Áudio Estúdio (Opus Lossless)'),
+      boolRow('speedvox_studio_audio', 'Ativado', 'Desativado')),
     el('div', { class: 'field-row' }, testBtn),
     el('p', { class: 'auth-hint' },
       'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
@@ -3363,10 +3461,56 @@ function setupInstallPrompt() {
   });
 }
 
+function initFakePanicVault() {
+  state.me = { id: 'panic-me', displayName: 'Jardel Cassimiro', username: 'jardel', avatarUrl: null };
+  const mockList = [
+    {
+      id: 'mock-1',
+      type: 'direct',
+      title: 'Mãe ❤️',
+      unread: 0,
+      avatarUrl: null,
+      lastMessage: { type: 'text', body: 'Oi filho, tudo bem? Me liga quando puder.', createdAt: Date.now() - 3600 * 1000 }
+    },
+    {
+      id: 'mock-2',
+      type: 'direct',
+      title: 'Amor 😍',
+      unread: 0,
+      avatarUrl: null,
+      lastMessage: { type: 'text', body: 'Estou comprando as coisas pro jantar!', createdAt: Date.now() - 7200 * 1000 }
+    },
+    {
+      id: 'mock-3',
+      type: 'group',
+      title: 'Trabalho (Projetos)',
+      unread: 0,
+      avatarUrl: null,
+      lastMessage: { type: 'text', body: 'Marcos: Relatório enviado para o cliente.', createdAt: Date.now() - 10000 * 1000 }
+    }
+  ];
+  state.chats.clear();
+  for (const c of mockList) {
+    state.chats.set(c.id, c);
+    state.messages.set(c.id, [
+      { id: `msg-${c.id}-1`, chatId: c.id, senderId: 'other', type: 'text', body: c.lastMessage.body, createdAt: c.lastMessage.createdAt }
+    ]);
+  }
+  $('#auth-screen').classList.add('hidden');
+  $('#app').classList.remove('hidden');
+  renderChatList();
+}
+
 async function boot() {
   // Bloqueio do app (PIN/digital) — se ativado, pede pra desbloquear antes
   // de mostrar qualquer coisa.
   await applock.guard();
+
+  if (localStorage.getItem('speedvox_panic_active') === '1') {
+    initFakePanicVault();
+    setupInstallPrompt();
+    return;
+  }
 
   setupAuthScreen();
   checkVerifiedParam();
