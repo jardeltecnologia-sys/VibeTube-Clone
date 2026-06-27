@@ -3711,10 +3711,10 @@ function updateNetIndicator() {
   const ind = $('#net-indicator');
   const meshOn = state.mesh && state.mesh.enabled && state.mesh.status().peers > 0;
   if (state.socket && state.socket.connected) {
-    ind.className = 'net-indicator';
+    ind.className = 'net-indicator online';
     ind.title = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
   } else if (meshOn) {
-    ind.className = 'net-indicator mesh';
+    ind.className = 'net-indicator connecting';
     ind.title = `Servidor offline · ${state.mesh.status().peers} peers via mesh`;
   } else {
     ind.className = 'net-indicator offline';
