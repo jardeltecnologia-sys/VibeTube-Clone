@@ -2008,19 +2008,6 @@ function setupComposer() {
     setTimeout(() => document.addEventListener('click', close), 0);
   };
 
-  function updateComposerPlaceholder() {
-    const input = $('#message-input');
-    if (!input) return;
-    if (state.ghostModeActive) {
-      input.placeholder = '👻 Mensagem Fantasma (some em 15s)...';
-      input.style.border = '1px dashed var(--accent)';
-      input.style.boxShadow = '0 0 8px rgba(138, 43, 226, 0.4)';
-    } else {
-      input.placeholder = 'Mensagem';
-      input.style.border = '';
-      input.style.boxShadow = '';
-    }
-  }
   $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
@@ -2049,6 +2036,20 @@ function setupComposer() {
     updateComposerState(updated);
     toast('Contato desbloqueado');
   };
+}
+
+function updateComposerPlaceholder() {
+  const input = $('#message-input');
+  if (!input) return;
+  if (state.ghostModeActive) {
+    input.placeholder = '👻 Mensagem Fantasma (some em 15s)...';
+    input.style.border = '1px dashed var(--accent)';
+    input.style.boxShadow = '0 0 8px rgba(138, 43, 226, 0.4)';
+  } else {
+    input.placeholder = 'Mensagem';
+    input.style.border = '';
+    input.style.boxShadow = '';
+  }
 }
 
 // ------------------------------------------------------------------ voice messages
