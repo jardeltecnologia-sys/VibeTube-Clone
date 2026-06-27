@@ -25,7 +25,8 @@ const state = {
   typing: new Map(),      // chatId -> Map(userId -> displayName)
   replyTo: null,
   editing: null,
-  online: navigator.onLine,
+  serverReachable: false,
+  lastHealthOkAt: 0,
   e2eeReady: false,
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
   iceServers: null,
@@ -54,6 +55,71 @@ function el(tag, props = {}, ...children) {
   }
   return node;
 }
+
+const SERVER_REACHABLE_TTL_MS = 30000;
+const HEALTH_TIMEOUT_MS = 3500;
+let healthProbe = null;
+
+function socketIsConnected() {
+  return Boolean(state.socket && state.socket.connected);
+}
+
+function setServerReachable(ok) {
+  state.serverReachable = Boolean(ok);
+  if (ok) state.lastHealthOkAt = Date.now();
+}
+
+function cachedServerReachable() {
+  return socketIsConnected()
+    || (state.serverReachable && Date.now() - state.lastHealthOkAt < SERVER_REACHABLE_TTL_MS);
+}
+
+async function fetchServerHealth({ timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(apiUrl('/api/health'), {
+      cache: 'no-store',
+      signal: ctrl.signal,
+    });
+    if (!res.ok) {
+      const err = new Error(`HTTP ${res.status}`);
+      err.status = res.status;
+      throw err;
+    }
+    return await res.json().catch(() => ({ ok: true }));
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function isServerReachable({ force = false, timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
+  if (socketIsConnected()) {
+    setServerReachable(true);
+    return true;
+  }
+  if (!force && cachedServerReachable()) return true;
+  if (!force && healthProbe) return healthProbe;
+
+  healthProbe = (async () => {
+    try {
+      const h = await fetchServerHealth({ timeoutMs });
+      const ok = Boolean(h && h.ok);
+      setServerReachable(ok);
+      return ok;
+    } catch {
+      setServerReachable(false);
+      return false;
+    } finally {
+      healthProbe = null;
+      updateNetIndicator();
+    }
+  })();
+
+  return healthProbe;
+}
+
+const hasInternetConnection = isServerReachable;
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -421,6 +487,7 @@ async function connectSocket() {
 
   socket.on('connect', () => {
     console.log('SOCKET_CONNECTED');
+    setServerReachable(true);
     updateNetIndicator();
     flushOutbox();
     // Internet is back: keep the mesh device registry fresh (best-effort).
@@ -429,9 +496,11 @@ async function connectSocket() {
   socket.on('disconnect', () => {
     console.log('SOCKET_DISCONNECTED');
     updateNetIndicator();
+    hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
   });
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
+    else hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
   });
 
   socket.on('message:new', ({ message, clientId }) => {
@@ -1748,24 +1817,28 @@ function optimisticMessage(payload) {
 
 // Try to deliver one queued payload. Updates pending/failed state on the bubble.
 async function deliver(payload) {
-  if (state.socket && state.socket.connected) {
-    state.socket.emit('message:send', payload, (res) => {
-      if (res && res.error) markFailed(payload.clientId);
-      else if (res && res.ok) removeFromOutbox(payload.clientId);
-    });
-    // Safety net: if no ack/echo arrives, flag the message as failed so it can be retried.
-    setTimeout(() => {
-      const m = findByClientId(payload.clientId);
-      if (m && m.pending) markFailed(payload.clientId);
-    }, 12000);
+  if (!socketIsConnected()) {
+    if (state.socket && typeof state.socket.connect === 'function') {
+      try { state.socket.connect(); } catch { /* Socket.IO will retry on its own too. */ }
+    }
+    const reachable = await hasInternetConnection({ timeoutMs: 2500 });
+    if (reachable) {
+      updateNetIndicator();
+      return;
+    }
+    if (state.mesh && state.mesh.enabled) meshDeliver(payload);
     return;
   }
 
-  // Socket is disconnected: check if server is actually healthy (brief disconnect) or down (blackout/offline)
-  const isHealthy = await checkServerHealth();
-  if (!isHealthy && state.mesh && state.mesh.enabled) {
-    meshDeliver(payload);
-  }
+  state.socket.emit('message:send', payload, (res) => {
+    if (res && res.error) markFailed(payload.clientId);
+    else if (res && res.ok) removeFromOutbox(payload.clientId);
+  });
+  // Safety net: if no ack/echo arrives, flag the message as failed so it can be retried.
+  setTimeout(() => {
+    const m = findByClientId(payload.clientId);
+    if (m && m.pending) markFailed(payload.clientId);
+  }, 12000);
 }
 
 function findByClientId(clientId) {
@@ -2120,37 +2193,73 @@ function fileIcon(name, mime) {
   return FILE_ICONS[ext] || (String(mime || '').startsWith('image/') ? '🖼️' : '📎');
 }
 
-async function deliverMedia({ file, type, mediaName }) {
-  if (!state.activeChatId) return;
-  const online = state.socket && state.socket.connected;
-  if (online) {
-    const up = await api.upload(file);
-    const finalType = type || mediaTypeFor(up.mime || file.type);
-    queueAndSend({
-      chatId: state.activeChatId,
-      type: finalType,
-      mediaUrl: up.url,
-      mediaName: mediaName || up.name,
-      mediaMime: up.mime,
-      replyTo: state.replyTo ? state.replyTo.id : undefined,
-      ghostTtl: state.ghostModeActive ? 15 : undefined,
-    });
-    return;
-  }
-  // Offline → mesh.
+function detectMediaType(file, mime, forcedType) {
+  if (forcedType) return forcedType;
+  const byMime = mediaTypeFor(mime || file?.type || '');
+  if (byMime !== 'file') return byMime;
+  const ext = (file?.name || '').split('.').pop().toLowerCase();
+  return ext ? mediaTypeFor(`/${ext}`) : 'file';
+}
+
+function mediaKindLabel(type, file) {
+  const finalType = detectMediaType(file, file?.type, type);
+  if (finalType === 'audio') return 'Áudio';
+  if (finalType === 'video') return 'Vídeo';
+  if (finalType === 'image') return 'Imagem';
+  return 'Arquivo';
+}
+
+function isUploadValidationError(err) {
+  return [400, 413, 415].includes(Number(err && err.status));
+}
+
+function isNetworkUploadError(err) {
+  if (!err) return false;
+  if (err.network || err.name === 'AbortError') return true;
+  if (err.status) return false;
+  return /network|rede|failed to fetch|load failed|internet|offline|conex/i.test(String(err.message || ''));
+}
+
+function uploadErrorMessage(err, type, file) {
+  const status = Number(err && err.status);
+  const kind = mediaKindLabel(type, file);
+  if (status === 413) return `${kind} muito pesado`;
+  if (status === 415) return 'Formato não aceito';
+  if (status === 400) return 'Arquivo inválido';
+  if (status === 401 || status === 403) return 'Sessão expirada. Entre novamente.';
+  if (status === 429) return 'Muitas tentativas. Tente novamente em instantes.';
+  if (status >= 500) return 'Erro no servidor. Tente novamente.';
+  if (isNetworkUploadError(err)) return 'Sem conexão';
+  return (err && err.message) || 'Falha no upload';
+}
+
+function queueUploadedMedia(up, file, type, mediaName) {
+  const finalType = detectMediaType(file, up.mime, type);
+  queueAndSend({
+    chatId: state.activeChatId,
+    type: finalType,
+    mediaUrl: up.url,
+    mediaName: mediaName || up.name || file.name,
+    mediaMime: up.mime || file.type || 'application/octet-stream',
+    replyTo: state.replyTo ? state.replyTo.id : undefined,
+    ghostTtl: state.ghostModeActive ? 15 : undefined,
+  });
+}
+
+async function sendMediaViaMesh({ file, type, mediaName }) {
   if (!(state.mesh && state.mesh.enabled)) {
-    toast('Sem internet. Ative a Rede Mesh (⚙️) para enviar mídia offline.');
-    return;
+    toast('Sem conexão. Envio offline disponível pela Rede Mesh.');
+    return false;
   }
   const b64 = await fileToBase64(file);
   if (b64.length > 700000) {
-    toast('Mídia grande demais para a rede mesh. Tente um áudio curto ou foto menor.');
-    return;
+    toast('Mídia grande demais para a Rede Mesh. Tente um áudio curto ou foto menor.');
+    return false;
   }
   const chat = state.chats.get(state.activeChatId);
-  if (!chat) return;
+  if (!chat) return false;
   const mime = file.type || 'application/octet-stream';
-  const finalType = type || mediaTypeFor(mime);
+  const finalType = detectMediaType(file, mime, type);
   // Show it locally right away with a data: URL.
   const msg = optimisticMessage({
     clientId: newClientId(), chatId: chat.id, type: finalType,
@@ -2165,15 +2274,46 @@ async function deliverMedia({ file, type, mediaName }) {
     for (const m of chat.members) if (m.id !== state.me.id) state.mesh.sendMedia(m.id, meta);
   }
   toast('Enviando pela Rede Mesh…');
+  return true;
+}
+
+async function deliverMedia({ file, type, mediaName, onProgress } = {}) {
+  if (!state.activeChatId) return false;
+  let uploadErr = null;
+  try {
+    const up = onProgress ? await api.uploadWithProgress(file, onProgress) : await api.upload(file);
+    setServerReachable(true);
+    queueUploadedMedia(up, file, type, mediaName);
+    updateNetIndicator();
+    return true;
+  } catch (err) {
+    uploadErr = err;
+    if (isUploadValidationError(err) || (err && err.status)) {
+      toast(uploadErrorMessage(err, type, file));
+      return false;
+    }
+    if (!isNetworkUploadError(err)) {
+      toast(uploadErrorMessage(err, type, file));
+      return false;
+    }
+  }
+
+  const reachable = await hasInternetConnection({ force: true, timeoutMs: 2500 });
+  if (reachable) {
+    toast('Falha no upload. Tente novamente.');
+    return false;
+  }
+  if (uploadErr) setServerReachable(false);
+  return sendMediaViaMesh({ file, type, mediaName });
 }
 
 // ── Single-file send (legacy voice-recording path) ───────────────────────────
 async function sendFile(file) {
   if (!file || !state.activeChatId) return;
   try {
-    await deliverMedia({ file });
-    clearReply();
-  } catch (err) { toast('Falha no envio: ' + err.message); }
+    const ok = await deliverMedia({ file });
+    if (ok) clearReply();
+  } catch (err) { toast('Falha no envio: ' + uploadErrorMessage(err, undefined, file)); }
 }
 
 // ── Multi-file send — up to 500 files, with per-batch progress toast ──────────
@@ -2200,32 +2340,26 @@ async function sendFiles(fileList) {
 
   for (const file of files) {
     try {
-      const up = await api.uploadWithProgress(file, (pct) => {
+      const ok = await deliverMedia({ file, onProgress: (pct) => {
         bar.style.width = `${pct}%`;
-      });
-      const type = mediaTypeFor(up.mime || file.type);
-      queueAndSend({
-        chatId: state.activeChatId,
-        type,
-        mediaUrl: up.url,
-        mediaName: up.name,
-        mediaMime: up.mime,
-        replyTo: state.replyTo ? state.replyTo.id : undefined,
-        ghostTtl: state.ghostModeActive ? 15 : undefined,
-      });
-      sent++;
-      label.textContent = `Enviando ${sent}/${files.length}…`;
-      bar.style.width = `${Math.round((sent / files.length) * 100)}%`;
+      } });
+      if (ok) {
+        sent++;
+        label.textContent = `Enviando ${sent}/${files.length}…`;
+        bar.style.width = `${Math.round((sent / files.length) * 100)}%`;
+      }
     } catch (err) {
-      toast(`Falha: ${file.name} — ${err.message}`);
+      toast(`Falha: ${file.name} — ${uploadErrorMessage(err, undefined, file)}`);
     }
   }
 
   // Dismiss progress toast.
   tEl.classList.remove('show');
   setTimeout(() => tEl.remove(), 400);
-  toast(`✅ ${sent} arquivo(s) enviado(s)`);
-  clearReply();
+  if (sent) {
+    toast(`✅ ${sent} arquivo(s) enviado(s)`);
+    clearReply();
+  }
 }
 
 // ------------------------------------------------------------------ composer
@@ -2751,9 +2885,11 @@ function makeAvatarUploadable(node, name, onUploaded) {
     if (!file) return;
     try {
       const up = await api.upload(file);
+      setServerReachable(true);
+      updateNetIndicator();
       avatarBg(node, up.url, name);
       onUploaded(up.url);
-    } catch (err) { toast('Falha ao enviar imagem: ' + err.message); }
+    } catch (err) { toast(uploadErrorMessage(err, 'image', file)); }
   };
   node.onclick = () => input.click();
   node.append(input);
@@ -3732,6 +3868,8 @@ function statusComposer() {
       }
 
       const up = await api.upload(fileToUpload);
+      setServerReachable(true);
+      updateNetIndicator();
       pendingMedia = { url: up.url, type: isImage ? 'image' : 'video' };
 
       preview.style.background = '#000';
@@ -3761,7 +3899,7 @@ function statusComposer() {
       preview.append(textInput);
       toast('Arquivo carregado com sucesso!');
     } catch (err) {
-      toast('Falha no upload: ' + err.message);
+      toast(uploadErrorMessage(err, isVideo ? 'video' : 'image', f));
     }
   };
 
@@ -3902,40 +4040,20 @@ function refreshMyAvatar() {
   avatarBg($('#my-avatar-btn'), state.me.avatarUrl, state.me.displayName);
 }
 
-let lastHealthCheck = 0;
-let lastHealthResult = false;
-
-async function checkServerHealth() {
-  const now = Date.now();
-  if (now - lastHealthCheck < 3000) return lastHealthResult;
-  lastHealthCheck = now;
-  try {
-    const res = await fetch(apiUrl('/api/health'), { cache: 'no-store' });
-    if (res.ok) {
-      const data = await res.json();
-      lastHealthResult = (data && data.ok === true);
-      if (lastHealthResult) console.log('HEALTH_OK');
-      return lastHealthResult;
-    }
-  } catch (e) {}
-  lastHealthResult = false;
-  return false;
-}
-
 let lastNetMode = null;
 let lastMeshFallbackState = null;
 
-async function updateNetIndicator() {
+function updateNetIndicator() {
   const ind = $('#net-indicator');
   if (!ind) return;
 
-  const isHealthy = await checkServerHealth();
-  const socketConnected = Boolean(state.socket && state.socket.connected);
+  const isHealthy = cachedServerReachable();
+  const socketConnected = socketIsConnected();
   const meshOn = Boolean(state.mesh && state.mesh.enabled && state.mesh.status().peers > 0);
 
   let currentMode = 'offline';
   let colorClass = 'offline';
-  let titleText = 'Sem internet ou servidor offline';
+  let titleText = 'Reconectando…';
 
   if (isHealthy) {
     if (socketConnected) {
@@ -3944,8 +4062,8 @@ async function updateNetIndicator() {
       titleText = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
     } else {
       currentMode = 'connecting';
-      colorClass = 'connecting';
-      titleText = 'Conectando ao chat…';
+      colorClass = 'online';
+      titleText = 'Online · reconectando tempo real';
     }
   } else {
     if (meshOn) {
@@ -3955,7 +4073,7 @@ async function updateNetIndicator() {
     } else {
       currentMode = 'offline';
       colorClass = 'offline';
-      titleText = 'Sem internet e rede mesh desligada';
+      titleText = 'Sem conexão';
     }
   }
 
@@ -4053,17 +4171,15 @@ async function startApp(user) {
   setupComposer();
   await loadChats();
   updateNetIndicator();
+  hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
 
   // Background monitoring every 5 seconds to guarantee recovery of connection status
   setInterval(async () => {
-    const isHealthy = await checkServerHealth();
+    const isHealthy = await hasInternetConnection({ force: true, timeoutMs: 2500 });
     if (isHealthy) {
-      state.online = true;
       if (state.socket && !state.socket.connected) {
         state.socket.connect();
       }
-    } else {
-      state.online = false;
     }
     updateNetIndicator();
   }, 5000);
@@ -4186,14 +4302,11 @@ async function boot() {
   }
 
   window.addEventListener('online', () => {
-    updateNetIndicator();
-    if (state.socket && !state.socket.connected) {
-      state.socket.connect();
-    }
+    hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
   });
 
   window.addEventListener('offline', () => {
-    updateNetIndicator();
+    hasInternetConnection({ force: true, timeoutMs: 1500 }).catch(() => {});
   });
 
   // Unlock the audio engine on the first interaction so an incoming call rings
@@ -4216,8 +4329,9 @@ async function boot() {
     // app is loaded from local assets in the native build).
     const gbtn = $('#google-btn');
     if (gbtn) gbtn.href = apiUrl('/api/auth/google');
-    const res = await fetch(apiUrl('/api/health'), { cache: 'no-store' });
-    const h = await res.json();
+    const h = await fetchServerHealth();
+    setServerReachable(Boolean(h && h.ok));
+    updateNetIndicator();
     if (!h.google) {
       $('#google-btn').classList.add('hidden');
       $('#google-disabled').classList.remove('hidden');

@@ -39,6 +39,16 @@ async function request(method, path, body, isForm = false) {
   return data;
 }
 
+function networkError(message = 'Erro de rede') {
+  const err = new Error(message);
+  err.network = true;
+  return err;
+}
+
+function parseXhrJson(xhr) {
+  try { return JSON.parse(xhr.responseText || 'null'); } catch { return null; }
+}
+
 export const api = {
   register: (d) => request('POST', '/auth/register', d),
   login: (d) => request('POST', '/auth/login', d),
@@ -110,20 +120,27 @@ export const api = {
   uploadWithProgress(file, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload');
+      xhr.open('POST', apiUrl('/api/upload'));
       const token = getToken();
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
       };
       xhr.onload = () => {
-        try {
-          const d = JSON.parse(xhr.responseText);
-          if (xhr.status >= 400) { const err = new Error(d.error || `HTTP ${xhr.status}`); err.status = xhr.status; return reject(err); }
-          resolve(d);
-        } catch { reject(new Error('Resposta inválida do servidor')); }
+        const d = parseXhrJson(xhr);
+        if (xhr.status === 0) return reject(networkError());
+        if (xhr.status >= 400) {
+          const err = new Error((d && d.error) || `HTTP ${xhr.status}`);
+          err.status = xhr.status;
+          err.data = d;
+          return reject(err);
+        }
+        if (!d) return reject(new Error('Resposta inválida do servidor'));
+        resolve(d);
       };
-      xhr.onerror = () => reject(new Error('Erro de rede'));
+      xhr.onerror = () => reject(networkError());
+      xhr.onabort = () => reject(networkError('Upload cancelado'));
+      xhr.ontimeout = () => reject(networkError('Tempo esgotado no upload'));
       const fd = new FormData();
       fd.append('file', file);
       xhr.send(fd);
@@ -135,20 +152,27 @@ export const api = {
   async uploadBatch(files, onProgress) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/api/upload/batch');
+      xhr.open('POST', apiUrl('/api/upload/batch'));
       const token = getToken();
       if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
       xhr.upload.onprogress = (e) => {
         if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100));
       };
       xhr.onload = () => {
-        try {
-          const d = JSON.parse(xhr.responseText);
-          if (xhr.status >= 400) { const err = new Error(d.error || `HTTP ${xhr.status}`); err.status = xhr.status; return reject(err); }
-          resolve(d);
-        } catch { reject(new Error('Resposta inválida do servidor')); }
+        const d = parseXhrJson(xhr);
+        if (xhr.status === 0) return reject(networkError());
+        if (xhr.status >= 400) {
+          const err = new Error((d && d.error) || `HTTP ${xhr.status}`);
+          err.status = xhr.status;
+          err.data = d;
+          return reject(err);
+        }
+        if (!d) return reject(new Error('Resposta inválida do servidor'));
+        resolve(d);
       };
-      xhr.onerror = () => reject(new Error('Erro de rede'));
+      xhr.onerror = () => reject(networkError());
+      xhr.onabort = () => reject(networkError('Upload cancelado'));
+      xhr.ontimeout = () => reject(networkError('Tempo esgotado no upload'));
       const fd = new FormData();
       for (const f of files) fd.append('files', f);
       xhr.send(fd);

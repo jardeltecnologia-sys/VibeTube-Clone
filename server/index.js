@@ -65,6 +65,7 @@ app.use('/api/mesh', require('./routes/mesh'));
 app.use('/api/preview', require('./routes/preview'));
 
 app.get('/api/health', (req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true, app: 'speedvox', google: config.google.enabled, time: Date.now() });
 });
 
