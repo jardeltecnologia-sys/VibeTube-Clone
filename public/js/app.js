@@ -716,6 +716,9 @@ async function openChat(chatId) {
   state.replyTo = null;
   state.ghostModeActive = false;
   updateComposerPlaceholder();
+  hideComposerPreview();
+  clearTimeout(composerPreviewTimer);
+  composerPreviewTimer = null;
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
   $('#reply-preview').classList.add('hidden');
@@ -802,7 +805,7 @@ function chatItemNode(chat) {
     menuBtn);
 }
 
-const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas']];
+const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas'], ['status', 'Status']];
 function renderFolderTabs() {
   const bar = $('#folder-tabs');
   if (!bar) return;
@@ -819,6 +822,13 @@ function renderChatList() {
   const filter = $('#chat-search').value.trim().toLowerCase();
   const list = $('#chat-list');
   list.innerHTML = '';
+
+  const folder = state.chatFolder || 'all';
+  if (folder === 'status') {
+    renderStatusList();
+    return;
+  }
+
   const all = [...state.chats.values()].sort((a, b) => {
     if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
     const at = a.lastMessage ? a.lastMessage.createdAt : 0;
@@ -829,7 +839,6 @@ function renderChatList() {
   const archived = visible.filter((c) => c.archived);
   let active = visible.filter((c) => !c.archived);
   // Chat folders (Telegram-style filters).
-  const folder = state.chatFolder || 'all';
   if (folder === 'unread') active = active.filter((c) => c.unread > 0);
   else if (folder === 'groups') active = active.filter((c) => c.type === 'group');
   else if (folder === 'direct') active = active.filter((c) => c.type !== 'group');
@@ -1313,9 +1322,9 @@ function previewCardFrom(url, d) {
       onerror: function () { this.remove(); } }));
   }
   const body = el('div', { class: 'link-preview-body' });
+  body.append(el('div', { class: 'link-preview-site' }, d.site || hostOf(url)));
   if (d.title) body.append(el('div', { class: 'link-preview-title' }, d.title));
   if (d.description) body.append(el('div', { class: 'link-preview-desc' }, d.description));
-  body.append(el('div', { class: 'link-preview-site' }, d.site || hostOf(url)));
   card.append(body);
   return card;
 }
@@ -1706,6 +1715,7 @@ async function sendMessage() {
   queueAndSend(payload, plainText);
   input.value = '';
   input.style.height = 'auto';
+  hideComposerPreview();
   clearReply();
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
@@ -1952,8 +1962,34 @@ async function sendFile(file) {
 
 // ------------------------------------------------------------------ composer
 let typingTimer = null;
+let composerPreviewTimer = null;
+let composerPreviewUrl = null;
+
+function showComposerPreview(d, url) {
+  const wrap = $('#composer-link-preview');
+  if (!wrap || !d || (!d.title && !d.image)) { hideComposerPreview(); return; }
+  composerPreviewUrl = url;
+  const img = $('#composer-preview-img');
+  if (d.image) { img.src = d.image; img.style.display = 'block'; }
+  else img.style.display = 'none';
+  $('#composer-preview-site').textContent = d.site || '';
+  $('#composer-preview-title').textContent = d.title || '';
+  $('#composer-preview-desc').textContent = d.description || '';
+  wrap.style.display = 'flex';
+}
+
+function hideComposerPreview() {
+  const wrap = $('#composer-link-preview');
+  if (wrap) wrap.style.display = 'none';
+  composerPreviewUrl = null;
+}
+
 function setupComposer() {
   const input = $('#message-input');
+  $('#composer-preview-close').onclick = () => {
+    hideComposerPreview();
+    composerPreviewTimer = null;
+  };
   input.addEventListener('input', () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
@@ -1963,6 +1999,16 @@ function setupComposer() {
     clearTimeout(typingTimer);
     typingTimer = setTimeout(
       () => state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false }), 1800);
+    // Live link preview debounce (600ms)
+    clearTimeout(composerPreviewTimer);
+    composerPreviewTimer = setTimeout(async () => {
+      const url = firstUrl(input.value);
+      if (!url || url === composerPreviewUrl) return;
+      try {
+        const d = await api.linkPreview(url);
+        if (d && (d.title || d.image)) showComposerPreview(d, url);
+      } catch { /* ignore */ }
+    }, 600);
   });
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
@@ -3320,6 +3366,7 @@ function statusComposer() {
       backdrop.remove();
       toast('Status publicado');
       refreshStatusIndicator();
+      if (state.chatFolder === 'status') renderStatusList();
     } catch (err) { toast('Falha: ' + err.message); }
   } }, 'Publicar');
 
@@ -3356,7 +3403,13 @@ function viewStatuses(statuses, user, isMine) {
   overlay.append(bars, head, content, footer);
   document.body.append(overlay);
 
-  function close() { if (timer) clearTimeout(timer); overlay.remove(); refreshStatusIndicator(); openStatusPanel(); }
+  function close() {
+    if (timer) clearTimeout(timer);
+    overlay.remove();
+    refreshStatusIndicator();
+    if (state.chatFolder === 'status') renderStatusList();
+    else openStatusPanel();
+  }
 
   function render() {
     const s = statuses[idx];
@@ -3875,6 +3928,77 @@ function createTaskFromMessage(m) {
       err.textContent = e.message || 'Falha ao criar tarefa';
     }
   };
+}
+
+async function renderStatusList() {
+  renderFolderTabs();
+  const list = $('#chat-list');
+  list.innerHTML = '';
+  
+  list.append(el('li', { style: 'text-align:center; padding:20px; color:var(--text-dim)' }, 'Carregando status...'));
+
+  try {
+    const feed = await api.statusFeed();
+    list.innerHTML = '';
+    
+    // 1. My status item
+    const myAvatar = el('span', { class: 'avatar' });
+    avatarBg(myAvatar, state.me.avatarUrl, state.me.displayName);
+    
+    const myItem = el('li', { class: 'chat-item' },
+      el('span', { class: `status-ring${feed.me.length ? ' seen' : ''}` }, myAvatar),
+      el('div', { class: 'chat-item-body' },
+        el('div', { class: 'chat-item-head' },
+          el('span', { class: 'chat-item-title' }, 'Meu Status'),
+          el('span', { class: 'chat-item-time' }, '')),
+        el('div', { class: 'chat-item-preview' },
+          feed.me.length ? `${feed.me.length} atualização(ões) · Toque para ver` : 'Clique para adicionar um status')),
+      el('button', {
+        class: 'icon-btn',
+        title: 'Adicionar status',
+        style: 'margin-left: 10px; font-size: 20px; background: none; border: none; cursor: pointer; color: var(--accent);',
+        onclick: (e) => { e.stopPropagation(); statusComposer(); }
+      }, '＋')
+    );
+    
+    myItem.onclick = () => {
+      if (feed.me.length) viewStatuses(feed.me, state.me, true);
+      else statusComposer();
+    };
+    list.append(myItem);
+    
+    // Divider
+    if (feed.contacts.length > 0) {
+      list.append(el('li', { class: 'day-divider', style: 'padding: 8px 12px; font-size: 12px; background: var(--panel-3); color: var(--text-dim);' }, 'Atualizações recentes'));
+    }
+
+    // 2. Contacts' status items
+    for (const g of feed.contacts) {
+      const contactAvatar = el('span', { class: 'avatar' });
+      avatarBg(contactAvatar, g.user.avatarUrl, g.user.displayName);
+      
+      const item = el('li', { class: 'chat-item' },
+        el('span', { class: `status-ring${g.hasUnviewed ? '' : ' seen'}` }, contactAvatar),
+        el('div', { class: 'chat-item-body' },
+          el('div', { class: 'chat-item-head' },
+            el('span', { class: 'chat-item-title' }, g.user.displayName),
+            el('span', { class: 'chat-item-time' }, fmtTime(g.latestAt))),
+          el('div', { class: 'chat-item-preview' }, `${g.statuses.length} atualização(ões)`))
+      );
+      
+      item.onclick = () => {
+        viewStatuses(g.statuses, g.user, false);
+      };
+      list.append(item);
+    }
+    
+    if (feed.contacts.length === 0) {
+      list.append(el('li', { style: 'text-align:center; padding:30px; color:var(--text-dim); font-size: 14px;' }, 'Nenhum status recente dos seus contatos.'));
+    }
+  } catch (e) {
+    list.innerHTML = '';
+    list.append(el('li', { style: 'text-align:center; padding:20px; color:var(--danger)' }, 'Falha ao carregar status: ' + e.message));
+  }
 }
 
 boot();
