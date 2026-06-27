@@ -3,7 +3,7 @@
 // shell is cached so the app opens instantly and survives flaky connectivity —
 // the first step toward the mesh/blackout resilience story.
 
-const CACHE = 'speedvox-shell-v46';
+const CACHE = 'speedvox-shell-v48';
 const SHELL = [
   '/',
   '/index.html',
@@ -51,6 +51,12 @@ self.addEventListener('activate', (event) => {
       Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
+});
+
+// Allow the page to force-activate a waiting service worker without waiting
+// for all tabs to be closed (required for the mobile PWA instant-update flow).
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // --- Web Push: show a notification for an incoming message ---

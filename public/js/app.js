@@ -1639,8 +1639,11 @@ function queueAndSend(payload, plainText) {
 
 async function sendMessage() {
   const input = $('#message-input');
+  // Mobile IME fix: force-commit any pending composition (e.g. Android Gboard
+  // predictive text) before reading the value.
+  if (document.activeElement === input) input.blur();
   const body = input.value.trim();
-  if (!body || !state.activeChatId) return;
+  if (!body || !state.activeChatId) { input.focus(); return; }
 
   if (localStorage.getItem('speedvox_panic_active') === '1') {
     const msg = {
@@ -1717,6 +1720,8 @@ async function sendMessage() {
   input.style.height = 'auto';
   hideComposerPreview();
   clearReply();
+  // Re-focus so mobile keyboard stays up for rapid follow-up messages.
+  requestAnimationFrame(() => input.focus());
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
@@ -2013,7 +2018,11 @@ function setupComposer() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  $('#send-btn').onclick = sendMessage;
+  // Mobile fix: use both click AND touchend so the button responds on all touch
+  // devices, even when the virtual keyboard dismissal absorbs the synthetic click.
+  const sendBtn = $('#send-btn');
+  sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendMessage(); });
+  sendBtn.addEventListener('touchend', (e) => { e.preventDefault(); sendMessage(); });
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
@@ -3771,7 +3780,7 @@ async function boot() {
   if ('serviceWorker' in navigator) {
     // Auto-update: when a new version is deployed, the new service worker takes
     // over and we reload once so the user always runs the latest app (fixes the
-    // "stale cached version" problem where new features didn't appear).
+    // "stale cached version" problem where new features didn't appear on mobile).
     const hadController = Boolean(navigator.serviceWorker.controller);
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -3779,10 +3788,29 @@ async function boot() {
       reloading = true;
       window.location.reload();
     });
+
+    function activateWaiting(reg) {
+      // Tell the waiting SW to skip waiting and activate immediately
+      // instead of waiting for all browser tabs to close (critical for mobile PWA).
+      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+    }
+
     navigator.serviceWorker.register('/service-worker.js').then((reg) => {
-      // Check for a new version now and every time the app regains focus.
+      activateWaiting(reg); // in case SW was already waiting at load
+      reg.addEventListener('updatefound', () => {
+        const incoming = reg.installing;
+        if (incoming) {
+          incoming.addEventListener('statechange', () => {
+            if (incoming.state === 'installed') activateWaiting(reg);
+          });
+        }
+      });
+      // Poll: on focus, on visibility restore (mobile minimise→return), and once at start.
       reg.update().catch(() => {});
       window.addEventListener('focus', () => reg.update().catch(() => {}));
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
     }).catch(() => {});
   }
 }
