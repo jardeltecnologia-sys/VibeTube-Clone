@@ -1788,11 +1788,8 @@ function queueAndSend(payload, plainText) {
 
 async function sendMessage() {
   const input = $('#message-input');
-  // Mobile IME fix: force-commit any pending composition (e.g. Android Gboard
-  // predictive text) before reading the value.
-  if (document.activeElement === input) input.blur();
   const body = input.value.trim();
-  if (!body || !state.activeChatId) { input.focus(); return; }
+  if (!body || !state.activeChatId) return;
 
   if (localStorage.getItem('speedvox_panic_active') === '1') {
     const msg = {
@@ -1869,8 +1866,6 @@ async function sendMessage() {
   input.style.height = 'auto';
   hideComposerPreview();
   clearReply();
-  // Re-focus so mobile keyboard stays up for rapid follow-up messages.
-  requestAnimationFrame(() => input.focus());
   if (state.socket && state.socket.connected) {
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
@@ -2237,11 +2232,20 @@ function setupComposer() {
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  // Mobile fix: use both click AND touchend so the button responds on all touch
-  // devices, even when the virtual keyboard dismissal absorbs the synthetic click.
+  // Send button: use pointerdown (fires once for both mouse clicks and touch taps
+  // via the Pointer Events API) with a 300ms guard to prevent any double-fire.
+  // This replaces the old click+touchend combo that caused sendMessage() to be
+  // called twice on mobile (touchend fires first, then the synthetic click).
   const sendBtn = $('#send-btn');
-  sendBtn.addEventListener('click', (e) => { e.preventDefault(); sendMessage(); });
-  sendBtn.addEventListener('touchend', (e) => { e.preventDefault(); sendMessage(); });
+  let _sendGuard = false;
+  function _fireSend(e) {
+    e.preventDefault();
+    if (_sendGuard) return;
+    _sendGuard = true;
+    sendMessage();
+    setTimeout(() => { _sendGuard = false; }, 300);
+  }
+  sendBtn.addEventListener('pointerdown', _fireSend);
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
