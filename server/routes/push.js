@@ -33,8 +33,25 @@ router.post('/unsubscribe', (req, res) => {
 // full screen even with the app closed.
 router.post('/fcm', (req, res) => {
   const token = req.body && req.body.token;
-  if (!token || typeof token !== 'string') return res.status(400).json({ error: 'token inválido' });
+
+  console.log('FCM_REGISTER_ROUTE_HIT', {
+    userId: req.user && req.user.id,
+    hasToken: Boolean(token),
+    tokenLength: token && typeof token === 'string' ? token.length : 0,
+  });
+
+  if (!token || typeof token !== 'string') {
+    console.warn('FCM_REGISTER_ROUTE_INVALID_TOKEN', { userId: req.user && req.user.id });
+    return res.status(400).json({ error: 'token inválido' });
+  }
+
   fcm.saveToken(req.user.id, token);
+
+  console.log('FCM_REGISTER_ROUTE_SAVED', {
+    userId: req.user && req.user.id,
+    tokenPrefix: token.slice(0, 8),
+  });
+
   res.json({ ok: true });
 });
 

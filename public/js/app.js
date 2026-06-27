@@ -4198,6 +4198,12 @@ async function startApp(user) {
 
   setupPush();
   setupNativeCallPush();
+  setTimeout(setupNativeCallPush, 3000);
+  setTimeout(setupNativeCallPush, 10000);
+  window.addEventListener('focus', () => setupNativeCallPush());
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') setupNativeCallPush();
+  });
   refreshStatusIndicator();
 }
 
@@ -4205,12 +4211,53 @@ async function startApp(user) {
 // can ring incoming calls in full screen even with the app closed.
 async function setupNativeCallPush() {
   try {
-    if (!isNative()) return;
-    const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeedvoxCall;
-    if (!plugin || !plugin.getToken) return;
-    const { token } = await plugin.getToken();
-    if (token) await api.registerFcm(token);
-  } catch { /* best-effort; calls still work in foreground */ }
+    const cap = window.Capacitor || null;
+    const plugins = cap && cap.Plugins ? cap.Plugins : {};
+    const plugin = plugins.SpeedvoxCall;
+
+    const nativeFlag = (() => {
+      try { return isNative(); } catch { return false; }
+    })();
+
+    console.log('FCM_REGISTER_START', {
+      nativeFlag,
+      hasCapacitor: Boolean(cap),
+      hasPlugins: Boolean(cap && cap.Plugins),
+      hasSpeedvoxCall: Boolean(plugin),
+      hasGetToken: Boolean(plugin && plugin.getToken),
+      hasAuthToken: Boolean(getToken && getToken()),
+    });
+
+    // Do not rely only on isNative(); some Capacitor builds report it differently.
+    // If the native plugin exists, try it.
+    if (!plugin || !plugin.getToken) {
+      console.warn('FCM_REGISTER_NO_PLUGIN');
+      return;
+    }
+
+    if (!getToken || !getToken()) {
+      console.warn('FCM_REGISTER_NO_AUTH_TOKEN');
+      return;
+    }
+
+    const result = await plugin.getToken();
+    const token = result && result.token;
+
+    console.log('FCM_REGISTER_TOKEN_RESULT', {
+      hasToken: Boolean(token),
+      tokenLength: token ? String(token).length : 0,
+    });
+
+    if (!token) {
+      console.warn('FCM_REGISTER_EMPTY_TOKEN');
+      return;
+    }
+
+    await api.registerFcm(token);
+    console.log('FCM_REGISTER_OK');
+  } catch (err) {
+    console.error('FCM_REGISTER_ERROR', err && (err.stack || err.message || err));
+  }
 }
 
 // PWA installation: capture the browser's install event and offer a button.
