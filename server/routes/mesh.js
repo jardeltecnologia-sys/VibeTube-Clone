@@ -146,7 +146,7 @@ router.get('/pull', meshGate, (req, res) => {
   const rows = db.prepare(
     `SELECT envelope, received_at FROM mesh_messages
      WHERE received_at > ? AND (expires_at IS NULL OR expires_at > ?)
-       AND (? IS NULL OR from_device_id IS NULL OR from_device_id != ?)
+       AND (CAST(? AS TEXT) IS NULL OR from_device_id IS NULL OR from_device_id != ?)
      ORDER BY received_at ASC LIMIT ?`
   ).all(since, ts, deviceId, deviceId, limit);
   const messages = [];

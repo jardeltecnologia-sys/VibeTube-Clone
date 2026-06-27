@@ -420,12 +420,16 @@ async function connectSocket() {
   state.socket = socket;
 
   socket.on('connect', () => {
+    console.log('SOCKET_CONNECTED');
     updateNetIndicator();
     flushOutbox();
     // Internet is back: keep the mesh device registry fresh (best-effort).
     offline.registerDevice().catch(() => {});
   });
-  socket.on('disconnect', () => updateNetIndicator());
+  socket.on('disconnect', () => {
+    console.log('SOCKET_DISCONNECTED');
+    updateNetIndicator();
+  });
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
   });
@@ -1743,23 +1747,25 @@ function optimisticMessage(payload) {
 }
 
 // Try to deliver one queued payload. Updates pending/failed state on the bubble.
-function deliver(payload) {
-  if (!state.socket || !state.socket.connected) {
-    // No server link — route over the mesh if it is up, otherwise stay queued.
-    // The mesh hops the message toward the recipient and holds it if there's no
-    // path yet (store-and-forward), so it lands when a route appears.
-    if (state.mesh && state.mesh.enabled) meshDeliver(payload);
+async function deliver(payload) {
+  if (state.socket && state.socket.connected) {
+    state.socket.emit('message:send', payload, (res) => {
+      if (res && res.error) markFailed(payload.clientId);
+      else if (res && res.ok) removeFromOutbox(payload.clientId);
+    });
+    // Safety net: if no ack/echo arrives, flag the message as failed so it can be retried.
+    setTimeout(() => {
+      const m = findByClientId(payload.clientId);
+      if (m && m.pending) markFailed(payload.clientId);
+    }, 12000);
     return;
   }
-  state.socket.emit('message:send', payload, (res) => {
-    if (res && res.error) markFailed(payload.clientId);
-    else if (res && res.ok) removeFromOutbox(payload.clientId);
-  });
-  // Safety net: if no ack/echo arrives, flag the message as failed so it can be retried.
-  setTimeout(() => {
-    const m = findByClientId(payload.clientId);
-    if (m && m.pending) markFailed(payload.clientId);
-  }, 12000);
+
+  // Socket is disconnected: check if server is actually healthy (brief disconnect) or down (blackout/offline)
+  const isHealthy = await checkServerHealth();
+  if (!isHealthy && state.mesh && state.mesh.enabled) {
+    meshDeliver(payload);
+  }
 }
 
 function findByClientId(clientId) {
@@ -3765,6 +3771,7 @@ async function checkServerHealth() {
     if (res.ok) {
       const data = await res.json();
       lastHealthResult = (data && data.ok === true);
+      if (lastHealthResult) console.log('HEALTH_OK');
       return lastHealthResult;
     }
   } catch (e) {}
@@ -3772,26 +3779,57 @@ async function checkServerHealth() {
   return false;
 }
 
+let lastNetMode = null;
+let lastMeshFallbackState = null;
+
 async function updateNetIndicator() {
   const ind = $('#net-indicator');
-  const meshOn = state.mesh && state.mesh.enabled && state.mesh.status().peers > 0;
-  if (state.socket && state.socket.connected) {
-    ind.className = 'net-indicator online';
-    ind.title = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
-  } else if (meshOn) {
-    ind.className = 'net-indicator connecting';
-    ind.title = `Servidor offline · ${state.mesh.status().peers} peers via mesh`;
-  } else {
-    ind.className = 'net-indicator offline';
-    ind.title = 'Reconectando…';
+  if (!ind) return;
 
-    const isHealthy = await checkServerHealth();
-    if (isHealthy) {
-      ind.title = 'Conectando ao chat…';
+  const isHealthy = await checkServerHealth();
+  const socketConnected = Boolean(state.socket && state.socket.connected);
+  const meshOn = Boolean(state.mesh && state.mesh.enabled && state.mesh.status().peers > 0);
+
+  let currentMode = 'offline';
+  let colorClass = 'offline';
+  let titleText = 'Sem internet ou servidor offline';
+
+  if (isHealthy) {
+    if (socketConnected) {
+      currentMode = 'internet';
+      colorClass = 'online';
+      titleText = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
     } else {
-      ind.title = 'Sem internet ou servidor offline';
+      currentMode = 'connecting';
+      colorClass = 'connecting';
+      titleText = 'Conectando ao chat…';
+    }
+  } else {
+    if (meshOn) {
+      currentMode = 'mesh';
+      colorClass = 'connecting';
+      titleText = `Servidor offline · ${state.mesh.status().peers} peers via mesh`;
+    } else {
+      currentMode = 'offline';
+      colorClass = 'offline';
+      titleText = 'Sem internet e rede mesh desligada';
     }
   }
+
+  // Console logging transitions
+  if (currentMode !== lastNetMode) {
+    lastNetMode = currentMode;
+    console.log(`NET_MODE=${currentMode}`);
+  }
+
+  const currentMeshFallback = Boolean(!isHealthy && state.mesh && state.mesh.enabled);
+  if (currentMeshFallback !== lastMeshFallbackState) {
+    lastMeshFallbackState = currentMeshFallback;
+    console.log(currentMeshFallback ? 'MESH_FALLBACK_ENABLED' : 'MESH_FALLBACK_DISABLED');
+  }
+
+  ind.className = `net-indicator ${colorClass}`;
+  ind.title = titleText;
 }
 
 function logout() {
@@ -3872,6 +3910,20 @@ async function startApp(user) {
   setupComposer();
   await loadChats();
   updateNetIndicator();
+
+  // Background monitoring every 5 seconds to guarantee recovery of connection status
+  setInterval(async () => {
+    const isHealthy = await checkServerHealth();
+    if (isHealthy) {
+      state.online = true;
+      if (state.socket && !state.socket.connected) {
+        state.socket.connect();
+      }
+    } else {
+      state.online = false;
+    }
+    updateNetIndicator();
+  }, 5000);
 
   $('#fab-new-chat').onclick = newChatModal;
   $('#contacts-btn').onclick = contactsModal;
@@ -3990,26 +4042,15 @@ async function boot() {
     history.replaceState(null, '', location.pathname);
   }
 
-  window.addEventListener('online', async () => {
-    state.online = true;
+  window.addEventListener('online', () => {
     updateNetIndicator();
     if (state.socket && !state.socket.connected) {
       state.socket.connect();
     }
   });
 
-  let offlineTimeout;
   window.addEventListener('offline', () => {
-    clearTimeout(offlineTimeout);
-    offlineTimeout = setTimeout(async () => {
-      const isHealthy = await checkServerHealth();
-      if (!isHealthy) {
-        state.online = false;
-        updateNetIndicator();
-      } else {
-        state.online = true;
-      }
-    }, 1000);
+    updateNetIndicator();
   });
 
   // Unlock the audio engine on the first interaction so an incoming call rings
