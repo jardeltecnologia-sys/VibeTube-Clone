@@ -414,8 +414,10 @@ async function connectSocket() {
   }
 
   // Same-origin for the web/PWA; absolute server URL for the bundled native app.
+  // We omit forcing transports to allow auto-negotiation (polling -> websocket upgrade),
+  // which prevents connection failures when websockets are blocked by Cloudflare or carriers.
   const socket = API_BASE
-    ? io(API_BASE, { auth: { token: getToken() }, transports: ['websocket', 'polling'] })
+    ? io(API_BASE, { auth: { token: getToken() } })
     : io({ auth: { token: getToken() } });
   state.socket = socket;
 
