@@ -120,6 +120,19 @@ router.get('/:id/messages', (req, res) => {
   res.json({ messages: rows.reverse().map((m) => ({ ...serializeMessage(m), starred: starredIds.has(m.id) })) });
 });
 
+// Get pending scheduled messages I sent in this chat.
+router.get('/:id/messages/scheduled', (req, res) => {
+  if (!isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });
+  const rows = db
+    .prepare(
+      `SELECT m.* FROM messages m WHERE m.chat_id = ? AND m.sender_id = ?
+         AND m.send_at IS NOT NULL AND m.send_at > ?
+       ORDER BY m.send_at ASC`
+    )
+    .all(req.params.id, req.user.id, now());
+  res.json({ messages: rows.map((m) => serializeMessage(m)) });
+});
+
 // Set the disappearing-messages timer for a chat (any participant). 0 = off.
 router.post('/:id/disappearing', (req, res) => {
   if (!isMember(req.params.id, req.user.id)) return res.status(403).json({ error: 'forbidden' });

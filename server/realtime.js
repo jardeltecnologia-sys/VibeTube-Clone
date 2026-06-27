@@ -486,6 +486,11 @@ function setup(httpServer) {
     socket.on('message:delete', ({ messageId }) => {
       const msg = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId);
       if (!msg || msg.sender_id !== userId) return;
+      if (msg.send_at && msg.send_at > now()) {
+        db.prepare('DELETE FROM messages WHERE id = ?').run(messageId);
+        socket.emit('message:deleted', { messageId, chatId: msg.chat_id });
+        return;
+      }
       db.prepare('UPDATE messages SET deleted = 1, body = NULL WHERE id = ?').run(messageId);
       emitToChat(msg.chat_id, 'message:deleted', { messageId, chatId: msg.chat_id });
     });

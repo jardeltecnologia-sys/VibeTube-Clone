@@ -1605,6 +1605,64 @@ async function scheduleCurrentMessage() {
   const backdrop = modalShell('Agendar mensagem', bodyEl);
 }
 
+// Display pending scheduled messages for the active chat in a modal.
+async function showScheduledMessagesModal() {
+  if (!state.activeChatId) return;
+  const listEl = el('div', { style: 'max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;' });
+
+  const refreshList = async () => {
+    listEl.innerHTML = '';
+    try {
+      const res = await fetch(apiUrl(`/api/chats/${state.activeChatId}/messages/scheduled`));
+      const data = await res.json();
+      const messages = data.messages || [];
+
+      if (!messages.length) {
+        listEl.append(el('p', { style: 'color: var(--text-2); text-align: center; margin: 20px 0;' }, 'Nenhuma mensagem agendada neste chat.'));
+        return;
+      }
+
+      for (const m of messages) {
+        if (m.encrypted && m._plain == null) {
+          await decryptInto(m);
+        }
+
+        const text = m.deleted ? '(Apagada)' : (m._decryptFailed ? '🔒 Não decifrado' : (m._plain || m.body));
+        const item = el('div', { style: 'background: var(--panel-3); padding: 12px; border-radius: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--border);' });
+        const left = el('div', { style: 'flex: 1; min-width: 0;' });
+        left.append(el('div', { style: 'word-break: break-word; color: var(--text-1); font-size: 14px;' }, text));
+        left.append(el('div', { style: 'font-size: 11px; color: var(--text-2); margin-top: 6px; display: flex; align-items: center; gap: 4px;' }, '⏰ ' + new Date(m.sendAt).toLocaleString('pt-BR')));
+
+        const delBtn = el('button', {
+          style: 'background: none; border: none; font-size: 18px; cursor: pointer; color: #ff5252; padding: 6px; display: flex; align-items: center; justify-content: center; transition: transform 0.2s;',
+          title: 'Cancelar agendamento',
+          onclick: () => {
+            if (confirm('Cancelar e apagar esta mensagem agendada?')) {
+              state.socket.emit('message:delete', { messageId: m.id });
+              setTimeout(refreshList, 400); // refresh list
+            }
+          }
+        }, '🗑️');
+
+        item.append(left, delBtn);
+        listEl.append(item);
+      }
+    } catch (err) {
+      listEl.append(el('p', { style: 'color: #ff5252; text-align: center;' }, 'Erro ao carregar mensagens agendadas.'));
+    }
+  };
+
+  await refreshList();
+
+  const bodyEl = el('div', { class: 'modal-body' },
+    listEl,
+    el('div', { style: 'margin-top: 18px; display: flex; justify-content: flex-end;' },
+      el('button', { class: 'btn-primary', onclick: () => backdrop.remove() }, 'Fechar'))
+  );
+
+  const backdrop = modalShell('Mensagens Agendadas', bodyEl);
+}
+
 // Create a poll (Telegram-style) in the active chat.
 function pollComposeModal() {
   if (!state.activeChatId) return;
@@ -1782,6 +1840,7 @@ function setupComposer() {
     menu.append(item('📎 Foto ou arquivo', () => $('#file-input').click()));
     menu.append(item('📊 Enquete', () => pollComposeModal()));
     menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
+    menu.append(item('📅 Mensagens agendadas', () => showScheduledMessagesModal()));
     document.body.append(menu);
     const r = e.currentTarget.getBoundingClientRect();
     menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
