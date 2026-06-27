@@ -372,12 +372,29 @@ input, textarea { font-family: inherit; font-size: 15px; }
   padding: 16px; background: var(--panel-2); color: var(--text-dim); font-size: 14px; }
 .block-banner button { color: var(--accent); font-weight: 600; }
 .block-banner button:hover { text-decoration: underline; }
-.composer { display: flex; align-items: flex-end; gap: 6px; padding: 10px 12px; background: var(--panel-2);
-  flex-wrap: nowrap; }
+.composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 10px 12px;
+  padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+  background: var(--panel-2);
+  flex-wrap: nowrap;
+  position: relative;
+  z-index: 10;
+}
 .composer textarea {
-  flex: 1 1 auto; min-width: 0; resize: none; max-height: 120px; background: var(--panel-3);
-  border: none; border-radius: 10px; padding: 11px 14px; color: var(--text);
-  outline: none; line-height: 1.4;
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  max-height: 120px;
+  background: var(--panel-3);
+  border: none;
+  border-radius: 10px;
+  padding: 11px 14px;
+  color: var(--text);
+  outline: none;
+  line-height: 1.4;
 }
 .send-btn { background: var(--accent); color: #04130e; font-size: 18px; }
 .send-btn:hover { background: var(--accent-dark); color: #04130e; }
@@ -646,7 +663,7 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .call-log-btn { width: 40px; height: 40px; box-shadow: 0 2px 6px rgba(0,168,132,.35); }
 
 /* Botões do composer com mais presença. */
-.composer .icon-btn { color: #54656f; flex-shrink: 0; }
+.composer .icon-btn { color: #54656f; flex: 0 0 auto; width: 40px; height: 40px; }
 .composer .icon-btn:hover { color: var(--accent-dark); background: rgba(0,168,132,.1); }
 
 /* ---------- BLOQUEIO DO APP (PIN / digital) ---------- */

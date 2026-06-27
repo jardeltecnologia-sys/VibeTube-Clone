@@ -1802,93 +1802,115 @@ function queueAndSend(payload, plainText) {
   deliver(payload);
 }
 
-async function sendMessage() {
+let _sendGuard = false;
+
+async function sendTextMessageFromComposer(isFromEnter = false) {
   const input = $('#message-input');
-  // Mobile IME fix: force-commit any pending composition (e.g. Android Gboard
-  // predictive text) before reading the value.
-  if (document.activeElement === input) input.blur();
-  const body = input.value.trim();
-  if (!body || !state.activeChatId) { input.focus(); return; }
 
-  if (localStorage.getItem('speedvox_panic_active') === '1') {
-    const msg = {
-      id: `local-fake-${Date.now()}`,
-      chatId: state.activeChatId,
-      senderId: state.me.id,
-      type: 'text',
-      body,
-      createdAt: Date.now(),
-      pending: false
-    };
-    const list = state.messages.get(state.activeChatId) || [];
-    list.push(msg);
-    state.messages.set(state.activeChatId, list);
-    const chat = state.chats.get(state.activeChatId);
-    if (chat) chat.lastMessage = msg;
-    input.value = '';
-    input.style.height = 'auto';
-    renderMessages(true);
-    renderChatList();
+  if (!isFromEnter) {
+    // If sent via send button click/pointerdown:
+    // Force blur to commit Gboard prediction, and defer execution by 50ms.
+    if (document.activeElement === input) {
+      input.blur();
+      setTimeout(() => _actualSend(), 50);
+      return;
+    }
+  }
 
-    setTimeout(() => {
-      let replyText = 'Beleza!';
-      if (state.activeChatId === 'mock-1') replyText = 'Deus te abençoe, filho!';
-      else if (state.activeChatId === 'mock-2') replyText = 'Tá bom amor. Bjs!';
-      else if (state.activeChatId === 'mock-3') replyText = 'Entendido, obrigado pelo aviso.';
-      const replyMsg = {
+  _actualSend();
+
+  async function _actualSend() {
+    if (_sendGuard) return;
+    _sendGuard = true;
+    setTimeout(() => { _sendGuard = false; }, 300);
+
+    const body = input.value.trim();
+    if (!body || !state.activeChatId) {
+      // Re-focus if empty so the user can continue typing
+      requestAnimationFrame(() => input.focus());
+      return;
+    }
+
+    if (localStorage.getItem('speedvox_panic_active') === '1') {
+      const msg = {
         id: `local-fake-${Date.now()}`,
         chatId: state.activeChatId,
-        senderId: 'other',
+        senderId: state.me.id,
         type: 'text',
-        body: replyText,
+        body,
         createdAt: Date.now(),
         pending: false
       };
-      list.push(replyMsg);
-      if (chat) chat.lastMessage = replyMsg;
+      const list = state.messages.get(state.activeChatId) || [];
+      list.push(msg);
+      state.messages.set(state.activeChatId, list);
+      const chat = state.chats.get(state.activeChatId);
+      if (chat) chat.lastMessage = msg;
+      input.value = '';
+      input.style.height = 'auto';
       renderMessages(true);
       renderChatList();
-    }, 1500 + Math.random() * 1500);
-    return;
-  }
 
-  // Editing an existing message takes priority over sending a new one.
-  if (state.editing) {
+      setTimeout(() => {
+        let replyText = 'Beleza!';
+        if (state.activeChatId === 'mock-1') replyText = 'Deus te abençoe, filho!';
+        else if (state.activeChatId === 'mock-2') replyText = 'Tá bom amor. Bjs!';
+        else if (state.activeChatId === 'mock-3') replyText = 'Entendido, obrigado pelo aviso.';
+        const replyMsg = {
+          id: `local-fake-${Date.now()}`,
+          chatId: state.activeChatId,
+          senderId: 'other',
+          type: 'text',
+          body: replyText,
+          createdAt: Date.now(),
+          pending: false
+        };
+        list.push(replyMsg);
+        if (chat) chat.lastMessage = replyMsg;
+        renderMessages(true);
+        renderChatList();
+      }, 1500 + Math.random() * 1500);
+      return;
+    }
+
+    // Editing an existing message takes priority over sending a new one.
+    if (state.editing) {
+      input.value = '';
+      input.style.height = 'auto';
+      await applyEdit(body);
+      return;
+    }
+
+    const chat = state.chats.get(state.activeChatId);
+    const payload = { chatId: state.activeChatId, body, type: 'text' };
+    if (state.ghostModeActive) payload.ghostTtl = 15;
+    if (state.replyTo) payload.replyTo = state.replyTo.id;
+
+    // Group @mentions.
+    if (chat && chat.type === 'group') {
+      const mentions = collectMentions(body);
+      if (mentions.length) payload.mentions = mentions;
+    }
+    state.composerMentions.clear();
+    $('#mention-suggest').classList.add('hidden');
+
+    // Encrypt end-to-end for direct chats (shared with scheduled sends).
+    const enc = await encryptOutgoing(chat, body);
+    payload.body = enc.body;
+    if (enc.encrypted) payload.encrypted = true;
+    const plainText = enc.plainText;
+
+    queueAndSend(payload, plainText);
     input.value = '';
     input.style.height = 'auto';
-    await applyEdit(body);
-    return;
-  }
-
-  const chat = state.chats.get(state.activeChatId);
-  const payload = { chatId: state.activeChatId, body, type: 'text' };
-  if (state.ghostModeActive) payload.ghostTtl = 15;
-  if (state.replyTo) payload.replyTo = state.replyTo.id;
-
-  // Group @mentions.
-  if (chat && chat.type === 'group') {
-    const mentions = collectMentions(body);
-    if (mentions.length) payload.mentions = mentions;
-  }
-  state.composerMentions.clear();
-  $('#mention-suggest').classList.add('hidden');
-
-  // Encrypt end-to-end for direct chats (shared with scheduled sends).
-  const enc = await encryptOutgoing(chat, body);
-  payload.body = enc.body;
-  if (enc.encrypted) payload.encrypted = true;
-  const plainText = enc.plainText;
-
-  // Input may have changed during async encryption; only clear if unchanged.
-  queueAndSend(payload, plainText);
-  input.value = '';
-  input.style.height = 'auto';
-  hideComposerPreview();
-  clearReply();
-  // Re-focus so mobile keyboard stays up for rapid follow-up messages.
-  requestAnimationFrame(() => input.focus());
-  if (state.socket && state.socket.connected) {
-    state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
+    hideComposerPreview();
+    clearReply();
+    
+    // Re-focus so mobile keyboard stays up for rapid follow-up messages.
+    requestAnimationFrame(() => input.focus());
+    if (state.socket && state.socket.connected) {
+      state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
+    }
   }
 }
 
@@ -2250,21 +2272,26 @@ function setupComposer() {
       } catch { /* ignore */ }
     }, 600);
   });
-  input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  let isComposing = false;
+  input.addEventListener('compositionstart', () => {
+    isComposing = true;
   });
-  // Send button: use pointerdown event with a 300ms guard to prevent any double-fire.
-  // We do NOT prevent default here so Gboard commits the text composition naturally,
-  // and using pointerdown ensures the click is never "eaten" by keyboard dismissal.
+  input.addEventListener('compositionend', () => {
+    isComposing = false;
+  });
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      if (isComposing) return;
+      if (!e.shiftKey) {
+        e.preventDefault();
+        sendTextMessageFromComposer(true);
+      }
+    }
+  });
   const sendBtn = $('#send-btn');
-  let _sendGuard = false;
-  function _fireSend(e) {
-    if (_sendGuard) return;
-    _sendGuard = true;
-    sendMessage();
-    setTimeout(() => { _sendGuard = false; }, 300);
-  }
-  sendBtn.addEventListener('pointerdown', _fireSend);
+  sendBtn.addEventListener('pointerdown', () => {
+    sendTextMessageFromComposer(false);
+  });
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
