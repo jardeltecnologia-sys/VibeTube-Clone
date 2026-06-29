@@ -13,9 +13,11 @@ name: Deploy to production (Hostinger)
 #
 # Se os secrets de PROXY não existirem, conecta DIRETO no Hostinger.
 
+# Disparo automático em push DESATIVADO: a Hostinger bloqueia SSH de fora, então
+# este método falhava em todo merge (gerando "X vermelho" confuso). O deploy real
+# acontece pelo auto-deploy de DENTRO da VPS (cron + auto-deploy.sh). Fica só como
+# disparo MANUAL, caso um dia exista acesso SSH direto.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 concurrency:
