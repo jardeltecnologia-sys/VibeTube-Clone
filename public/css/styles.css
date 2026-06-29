@@ -816,3 +816,13 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .net-indicator.offline {
   color: var(--danger, #ef4444) !important;
 }
+
+/* ---------- GARANTIA: botão de enviar SEMPRE visível (PWA e APK) ---------- */
+.composer #send-btn, .composer #mic-btn {
+  display: inline-flex !important;
+  flex: 0 0 auto;
+  width: 40px; height: 40px;
+}
+/* O texto não pode "empurrar" os botões pra fora da tela. */
+.composer { flex-wrap: nowrap; }
+.composer textarea { flex: 1 1 auto; min-width: 0; }

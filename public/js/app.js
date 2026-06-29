@@ -1885,17 +1885,8 @@ let _sendGuard = false;
 
 async function sendTextMessageFromComposer(isFromEnter = false) {
   const input = $('#message-input');
-
-  if (!isFromEnter) {
-    // If sent via send button click/pointerdown:
-    // Force blur to commit Gboard prediction, and defer execution by 50ms.
-    if (document.activeElement === input) {
-      input.blur();
-      setTimeout(() => _actualSend(), 50);
-      return;
-    }
-  }
-
+  // Envio direto e robusto (sem blur/timeout, que travavam em vários celulares).
+  // O valor do textarea já está atualizado no toque/Enter.
   _actualSend();
 
   async function _actualSend() {
@@ -2428,8 +2419,19 @@ function setupComposer() {
       }
     }
   });
+  // Alguns teclados Android (Gboard com a tecla "Enviar") NÃO geram keydown
+  // Enter — disparam um "insertLineBreak". Tratamos isso também pra enviar.
+  input.addEventListener('beforeinput', (e) => {
+    if (e.inputType === 'insertLineBreak') {
+      e.preventDefault();
+      if (!isComposing) sendTextMessageFromComposer(true);
+    }
+  });
   const sendBtn = $('#send-btn');
-  sendBtn.addEventListener('pointerdown', () => {
+  // 'click' funciona de forma confiável no PWA e no WebView do APK (um único
+  // evento, sem o duplo-disparo de touchend+click).
+  sendBtn.addEventListener('click', (e) => {
+    e.preventDefault();
     sendTextMessageFromComposer(false);
   });
   $('#reply-cancel').onclick = () => {
