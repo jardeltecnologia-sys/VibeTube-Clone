@@ -221,5 +221,7 @@ ensureColumn('messages', 'mentions', 'mentions TEXT');
 // Scheduled messages: when set and in the future, the message is held back
 // (invisible) until the sweeper delivers it.
 ensureColumn('messages', 'send_at', 'send_at INTEGER');
+// Miniatura desfocada (data URI) pra prévia de fotos sem baixar a imagem cheia.
+ensureColumn('messages', 'media_thumb', 'media_thumb TEXT');
 
 module.exports = db;

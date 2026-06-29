@@ -266,7 +266,7 @@ function setup(httpServer) {
     // --- Send a message ---
     socket.on('message:send', (payload, cb) => {
       try {
-        const { chatId, body, type, mediaUrl, mediaName, mediaMime, replyTo, clientId, encrypted, forwarded, mentions } =
+        const { chatId, body, type, mediaUrl, mediaName, mediaMime, mediaThumb, replyTo, clientId, encrypted, forwarded, mentions } =
           payload || {};
         if (!isMember(chatId, userId)) {
           if (typeof cb === 'function') cb({ error: 'forbidden' });
@@ -315,8 +315,8 @@ function setup(httpServer) {
         const validMentions = Array.isArray(mentions)
           ? [...new Set(mentions)].filter((uid) => isMember(chatId, uid)) : [];
         db.prepare(
-          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, reply_to, encrypted, forwarded, expires_at, mentions, send_at, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO messages (id, chat_id, sender_id, type, body, media_url, media_name, media_mime, media_thumb, reply_to, encrypted, forwarded, expires_at, mentions, send_at, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         ).run(
           msgId,
           chatId,
@@ -326,6 +326,8 @@ function setup(httpServer) {
           mediaUrl || null,
           mediaName || null,
           mediaMime || null,
+          // Aceita só miniatura como data URI de imagem (evita guardar lixo grande).
+          (typeof mediaThumb === 'string' && mediaThumb.startsWith('data:image/') && mediaThumb.length < 8000) ? mediaThumb : null,
           replyTo || null,
           encrypted ? 1 : 0,
           forwarded ? 1 : 0,

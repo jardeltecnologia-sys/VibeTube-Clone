@@ -115,6 +115,7 @@ function serializeMessage(row) {
     mediaUrl: row.deleted ? null : row.media_url,
     mediaName: row.deleted ? null : row.media_name,
     mediaMime: row.deleted ? null : row.media_mime,
+    mediaThumb: row.deleted ? null : (row.media_thumb || null),
     replyTo: row.reply_to,
     encrypted: Boolean(row.encrypted),
     forwarded: Boolean(row.forwarded),

@@ -1013,27 +1013,33 @@ function renderMessages(keepScroll) {
         const showImg = () => el('img', { src: mu, loading: 'lazy', onclick: () => window.open(mu, '_blank') });
         if (autoDownloadOn()) {
           parts.push(el('div', { class: 'msg-media' }, showImg()));
+        } else if (m.mediaThumb) {
+          // Prévia desfocada (estilo WhatsApp): mostra a miniatura borrada; toque
+          // baixa a foto cheia. Economiza dados até a pessoa querer ver.
+          const wrap = el('div', { class: 'msg-media media-blur' },
+            el('img', { class: 'blur-thumb', src: m.mediaThumb }),
+            el('div', { class: 'media-load-badge' }, '⬇ Ver foto'));
+          wrap.onclick = () => { wrap.className = 'msg-media'; wrap.innerHTML = ''; wrap.append(showImg()); };
+          parts.push(wrap);
         } else {
-          // Auto-download off: show a tap-to-load placeholder (saves mobile data).
           const wrap = el('div', { class: 'msg-media' });
           const btn = el('button', { class: 'media-download-btn',
-            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
-            '⬇ Baixar foto');
+            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } }, '⬇ Baixar foto');
           wrap.append(btn);
           parts.push(wrap);
         }
       } else if (m.type === 'video' && m.mediaUrl) {
         const vu = mediaUrl(m.mediaUrl);
-        const showVid = () => el('video', { class: 'msg-video', src: vu, controls: '',
-          preload: 'metadata', playsinline: '' });
+        const player = (auto) => el('video', { class: 'msg-video', src: vu, controls: '',
+          preload: 'metadata', playsinline: '', autoplay: auto ? '' : null });
         if (autoDownloadOn()) {
-          parts.push(el('div', { class: 'msg-media' }, showVid()));
+          parts.push(el('div', { class: 'msg-media' }, player(false)));
         } else {
-          const wrap = el('div', { class: 'msg-media' });
-          const btn = el('button', { class: 'media-download-btn',
-            onclick: () => { wrap.innerHTML = ''; wrap.append(showVid()); } },
-            '▶ Carregar vídeo');
-          wrap.append(btn);
+          // Prévia do vídeo com botão de play. Toque → carrega e dá play.
+          const wrap = el('div', { class: 'msg-media media-video-ph' });
+          if (m.mediaThumb) wrap.append(el('img', { class: 'blur-thumb', src: m.mediaThumb }));
+          wrap.append(el('div', { class: 'media-play' }, '▶'));
+          wrap.onclick = () => { wrap.className = 'msg-media'; wrap.innerHTML = ''; wrap.append(player(true)); };
           parts.push(wrap);
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
@@ -1445,6 +1451,7 @@ function optimisticMessage(payload) {
     mediaUrl: payload.mediaUrl || null,
     mediaName: payload.mediaName || null,
     mediaMime: payload.mediaMime || null,
+    mediaThumb: payload.mediaThumb || null,
     replyTo: payload.replyTo || null,
     mentions: payload.mentions || [],
     forwarded: Boolean(payload.forwarded),
@@ -1675,12 +1682,21 @@ function fileToBase64(file) {
 // Deliver a media item. When online, upload to the server (full size, any file).
 // When offline but the mesh is up, send it chunked over the mesh so voice notes
 // and photos still reach nearby people in a blackout — no internet, no towers.
-// Tipo da mensagem a partir do mime (foto, vídeo, áudio ou arquivo genérico).
-function mediaTypeFor(mime) {
-  const m = String(mime || '');
+// Tipo da mensagem a partir do mime E da extensão (foto, vídeo, áudio ou
+// arquivo). A extensão é essencial: muitos vídeos chegam sem mime (ou genérico)
+// e, sem isso, apareceriam como "documento".
+const MEDIA_EXT = {
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'],
+  video: ['mp4', 'mov', 'webm', 'mkv', 'avi', '3gp', 'm4v', 'ogv', 'mpeg', 'mpg'],
+  audio: ['mp3', 'm4a', 'aac', 'ogg', 'oga', 'wav', 'opus', 'amr', 'flac', 'weba'],
+};
+function mediaTypeFor(mime, name) {
+  const m = String(mime || '').toLowerCase();
   if (m.startsWith('image/')) return 'image';
   if (m.startsWith('video/')) return 'video';
   if (m.startsWith('audio/')) return 'audio';
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  for (const t of ['image', 'video', 'audio']) if (MEDIA_EXT[t].includes(ext)) return t;
   return 'file';
 }
 
@@ -1689,13 +1705,14 @@ async function deliverMedia({ file, type, mediaName }) {
   const online = state.socket && state.socket.connected;
   if (online) {
     const up = await api.upload(file);
-    const finalType = type || mediaTypeFor(up.mime || file.type);
+    const finalType = type || mediaTypeFor(up.mime || file.type, mediaName || up.name || file.name);
     queueAndSend({
       chatId: state.activeChatId,
       type: finalType,
       mediaUrl: up.url,
       mediaName: mediaName || up.name,
       mediaMime: up.mime,
+      mediaThumb: up.thumb || undefined,
       replyTo: state.replyTo ? state.replyTo.id : undefined,
     });
     return;
@@ -1713,7 +1730,7 @@ async function deliverMedia({ file, type, mediaName }) {
   const chat = state.chats.get(state.activeChatId);
   if (!chat) return;
   const mime = file.type || 'application/octet-stream';
-  const finalType = type || mediaTypeFor(mime);
+  const finalType = type || mediaTypeFor(mime, mediaName || file.name);
   // Show it locally right away with a data: URL.
   const msg = optimisticMessage({
     clientId: newClientId(), chatId: chat.id, type: finalType,

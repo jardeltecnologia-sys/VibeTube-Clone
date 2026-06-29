@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const multer = require('multer');
+const sharp = require('sharp');
 const config = require('../config');
 const { requireAuth } = require('../auth-middleware');
 const { id } = require('../util');
@@ -46,7 +47,7 @@ const upload = multer({
 const router = express.Router();
 
 router.post('/', requireAuth, (req, res) => {
-  upload.single('file')(req, res, (err) => {
+  upload.single('file')(req, res, async (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         const mb = Math.round(config.uploadMaxBytes / (1024 * 1024));
@@ -56,12 +57,28 @@ router.post('/', requireAuth, (req, res) => {
       return res.status(400).json({ error: 'Falha no upload' });
     }
     if (!req.file) return res.status(400).json({ error: 'arquivo ausente' });
-    res.json({
+    const out = {
       url: `/uploads/${req.file.filename}`,
       name: req.file.originalname,
       mime: req.file.mimetype,
       size: req.file.size,
-    });
+    };
+    // Para fotos: gera uma miniatura minúscula e desfocada (data URI ~1 KB).
+    // Isso dá a "prévia borrada" estilo WhatsApp antes de baixar a imagem cheia.
+    const isImage = (req.file.mimetype || '').startsWith('image/')
+      || /\.(jpe?g|png|gif|webp|bmp|heic|heif|avif)$/i.test(req.file.originalname || '');
+    if (isImage) {
+      try {
+        const buf = await sharp(path.join(config.uploadDir, req.file.filename))
+          .rotate()
+          .resize(28, 28, { fit: 'inside' })
+          .blur(1.1)
+          .jpeg({ quality: 42 })
+          .toBuffer();
+        out.thumb = `data:image/jpeg;base64,${buf.toString('base64')}`;
+      } catch { /* sem miniatura: o app cai num placeholder simples */ }
+    }
+    res.json(out);
   });
 });
 
