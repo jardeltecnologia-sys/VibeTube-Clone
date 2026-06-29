@@ -162,9 +162,9 @@
           <button id="composer-preview-close" title="Remover prévia">✕</button>
         </div>
 
-        <footer class="composer" id="composer">
-          <button class="icon-btn" id="emoji-btn" title="Emoji">😊</button>
-          <button class="icon-btn" id="attach-btn" title="Anexar">📎</button>
+        <form class="composer" id="composer" autocomplete="off">
+          <button type="button" class="icon-btn" id="emoji-btn" title="Emoji">😊</button>
+          <button type="button" class="icon-btn" id="attach-btn" title="Anexar">📎</button>
           <input type="file" id="file-input" hidden multiple
             accept="image/*,video/*,audio/*,
               .mp3,.aac,.flac,.wav,.ogg,.opus,.m4a,.wma,.aiff,.ape,.alac,.dsd,.mka,.ra,.amr,.3gp,
@@ -174,8 +174,8 @@
               .zip,.rar,.7z,.tar,.gz" />
           <textarea id="message-input" rows="1" placeholder="Mensagem" enterkeyhint="send" autocomplete="off" autocorrect="on" spellcheck="true"></textarea>
           <button type="button" class="icon-btn" id="mic-btn" title="Gravar mensagem de voz">🎤</button>
-          <button type="button" class="icon-btn send-btn" id="send-btn" title="Enviar">➤</button>
-        </footer>
+          <button type="submit" class="icon-btn send-btn" id="send-btn" title="Enviar" aria-label="Enviar mensagem">➤</button>
+        </form>
       </div>
     </main>
   </div>

@@ -1885,22 +1885,20 @@ let _sendGuard = false;
 
 async function sendTextMessageFromComposer(isFromEnter = false) {
   const input = $('#message-input');
+  if (!input) return false;
+
+  const body = input.value.trim();
+  if (!body || !state.activeChatId) {
+    requestAnimationFrame(() => input.focus());
+    return false;
+  }
+
   // Envio direto e robusto (sem blur/timeout, que travavam em vários celulares).
-  // O valor do textarea já está atualizado no toque/Enter.
-  _actualSend();
+  // A guarda evita duplicidade quando touch/pointer/click chegam juntos.
+  if (_sendGuard) return false;
+  _sendGuard = true;
 
-  async function _actualSend() {
-    if (_sendGuard) return;
-    _sendGuard = true;
-    setTimeout(() => { _sendGuard = false; }, 300);
-
-    const body = input.value.trim();
-    if (!body || !state.activeChatId) {
-      // Re-focus if empty so the user can continue typing
-      requestAnimationFrame(() => input.focus());
-      return;
-    }
-
+  try {
     if (localStorage.getItem('speedvox_panic_active') === '1') {
       const msg = {
         id: `local-fake-${Date.now()}`,
@@ -1940,7 +1938,7 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
         renderMessages(true);
         renderChatList();
       }, 1500 + Math.random() * 1500);
-      return;
+      return true;
     }
 
     // Editing an existing message takes priority over sending a new one.
@@ -1948,7 +1946,7 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
       input.value = '';
       input.style.height = 'auto';
       await applyEdit(body);
-      return;
+      return true;
     }
 
     const chat = state.chats.get(state.activeChatId);
@@ -1981,6 +1979,14 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
     if (state.socket && state.socket.connected) {
       state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
     }
+    return true;
+  } catch (err) {
+    console.error('sendTextMessageFromComposer', err);
+    toast('Falha ao enviar mensagem. Tente novamente.');
+    requestAnimationFrame(() => input.focus());
+    return false;
+  } finally {
+    setTimeout(() => { _sendGuard = false; }, 250);
   }
 }
 
@@ -2378,14 +2384,46 @@ function hideComposerPreview() {
 }
 
 function setupComposer() {
+  const composer = $('#composer');
   const input = $('#message-input');
   $('#composer-preview-close').onclick = () => {
     hideComposerPreview();
     composerPreviewTimer = null;
   };
-  input.addEventListener('input', () => {
+
+  let lastSendRequestAt = 0;
+  function requestComposerSend(event, isFromEnter = false) {
+    if (event) {
+      if (event.cancelable) event.preventDefault();
+      event.stopPropagation();
+    }
+    const nowTs = Date.now();
+    if (nowTs - lastSendRequestAt < 220) return;
+    lastSendRequestAt = nowTs;
+    sendTextMessageFromComposer(isFromEnter);
+  }
+
+  function resizeComposerInput() {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }
+
+  const isLineBreakInput = (event) =>
+    event && (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph');
+
+  let isComposing = false;
+  let allowNextLineBreak = false;
+  let allowedLineBreakInserted = false;
+
+  input.addEventListener('input', (event) => {
+    if (isLineBreakInput(event) && !allowedLineBreakInserted && !isComposing) {
+      input.value = input.value.replace(/\n+$/g, '');
+      resizeComposerInput();
+      requestComposerSend(null, true);
+      return;
+    }
+    if (allowedLineBreakInserted) allowedLineBreakInserted = false;
+    resizeComposerInput();
     updateMentionSuggest();
     if (!state.activeChatId) return;
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: true });
@@ -2403,7 +2441,6 @@ function setupComposer() {
       } catch { /* ignore */ }
     }, 600);
   });
-  let isComposing = false;
   input.addEventListener('compositionstart', () => {
     isComposing = true;
   });
@@ -2411,28 +2448,39 @@ function setupComposer() {
     isComposing = false;
   });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      if (isComposing) return;
-      if (!e.shiftKey) {
-        e.preventDefault();
-        sendTextMessageFromComposer(true);
+    if (e.key === 'Enter' || e.keyCode === 13) {
+      if (isComposing || e.isComposing) return;
+      if (e.shiftKey) {
+        allowNextLineBreak = true;
+        setTimeout(() => { allowNextLineBreak = false; }, 120);
+        return;
       }
+      requestComposerSend(e, true);
     }
   });
   // Alguns teclados Android (Gboard com a tecla "Enviar") NÃO geram keydown
-  // Enter — disparam um "insertLineBreak". Tratamos isso também pra enviar.
+  // Enter — disparam "insertLineBreak" ou "insertParagraph". Tratamos também.
   input.addEventListener('beforeinput', (e) => {
-    if (e.inputType === 'insertLineBreak') {
-      e.preventDefault();
-      if (!isComposing) sendTextMessageFromComposer(true);
+    if (isLineBreakInput(e)) {
+      if (allowNextLineBreak) {
+        allowNextLineBreak = false;
+        allowedLineBreakInserted = true;
+        return;
+      }
+      if (!isComposing && !e.isComposing) requestComposerSend(e, true);
     }
   });
   const sendBtn = $('#send-btn');
-  // 'click' funciona de forma confiável no PWA e no WebView do APK (um único
-  // evento, sem o duplo-disparo de touchend+click).
+  composer.addEventListener('submit', (e) => requestComposerSend(e, false));
+  // Redundância deliberada para PWA/WebView: alguns aparelhos entregam pointer
+  // sem click, outros click sem pointer. A guarda acima impede envio duplo.
+  sendBtn.addEventListener('pointerup', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    requestComposerSend(e, false);
+  });
+  sendBtn.addEventListener('touchend', (e) => requestComposerSend(e, false), { passive: false });
   sendBtn.addEventListener('click', (e) => {
-    e.preventDefault();
-    sendTextMessageFromComposer(false);
+    requestComposerSend(e, false);
   });
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
