@@ -1995,10 +1995,22 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
 // send plus whether it's encrypted and the plaintext (for the local echo).
 async function encryptOutgoing(chat, body) {
   if (chat && chat.type === 'direct') {
-    const ratEnv = await ratchetEncryptFor(chat, body);
-    if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
-    const key = await ensureChatKey(chat);
-    if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
+    try {
+      const ratEnv = await ratchetEncryptFor(chat, body);
+      if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
+    } catch (err) {
+      console.warn('Double Ratchet encrypt failed; resetting this chat session', err);
+      try { localStorage.removeItem(ratchetKey(chat.id)); } catch {}
+      try { state.keyCache.delete(chat.id); } catch {}
+    }
+
+    try {
+      const key = await ensureChatKey(chat);
+      if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
+    } catch (err) {
+      console.warn('Static E2EE encrypt failed; sending plaintext fallback', err);
+      try { state.keyCache.delete(chat.id); } catch {}
+    }
   }
   return { body, encrypted: false, plainText: undefined };
 }
