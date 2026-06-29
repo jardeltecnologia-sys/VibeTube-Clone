@@ -213,6 +213,71 @@ async function setup(httpServer) {
     }).catch(() => {});
   }
 
+  async function userHasSockets(userId) {
+    try {
+      const sockets = await io.in(`user:${userId}`).allSockets();
+      return sockets.size > 0;
+    } catch (err) {
+      console.warn('Cluster online check failed; using local presence map', err);
+      return isOnline(userId);
+    }
+  }
+
+  function emitCluster(event, ...args) {
+    try {
+      if (typeof io.serverSideEmit === 'function') io.serverSideEmit(event, ...args);
+    } catch (err) {
+      console.warn('Cluster serverSideEmit failed', event, err);
+    }
+  }
+
+  function markCallAnswered(callId) {
+    const call = activeCalls.get(callId);
+    if (!call) return;
+    call.answeredAt = call.answeredAt || now();
+    if (call.ringTimer) {
+      clearTimeout(call.ringTimer);
+      call.ringTimer = null;
+    }
+  }
+
+  function logCallEverywhere(callId, status) {
+    const call = activeCalls.get(callId);
+    if (call) logCall(callId, status || (call.answeredAt ? 'completed' : 'canceled'));
+    emitCluster('speedvox:call:log', callId, status || null);
+  }
+
+  function deliverRingingCallsToUser(targetUserId) {
+    for (const [cid, call] of activeCalls) {
+      if (call.calleeId === targetUserId && !call.answeredAt && !call.logged) {
+        const caller = db.prepare('SELECT * FROM users WHERE id = ?').get(call.callerId);
+        if (caller) {
+          io.to(`user:${targetUserId}`).emit('call:incoming', {
+            from: publicUser(caller), callId: cid, media: call.media, chatId: call.chatId || null,
+          });
+        }
+      }
+    }
+  }
+
+  function endCallsForOfflineUser(offlineUserId) {
+    for (const [cid, call] of activeCalls) {
+      if (call.callerId === offlineUserId || call.calleeId === offlineUserId) {
+        const other = call.callerId === offlineUserId ? call.calleeId : call.callerId;
+        io.to(`user:${other}`).emit('call:ended', { from: offlineUserId, callId: cid });
+        logCall(cid, call.answeredAt ? 'completed' : (call.calleeId === offlineUserId ? 'missed' : 'canceled'));
+      }
+    }
+  }
+
+  io.on('speedvox:call:answered', markCallAnswered);
+  io.on('speedvox:call:log', (callId, status) => {
+    const call = activeCalls.get(callId);
+    if (call) logCall(callId, status || (call.answeredAt ? 'completed' : 'canceled'));
+  });
+  io.on('speedvox:call:deliver-ringing', deliverRingingCallsToUser);
+  io.on('speedvox:call:user-offline', endCallsForOfflineUser);
+
   // Deliver scheduled messages whose time has come.
   function deliverScheduled() {
     const due = db
@@ -260,6 +325,7 @@ async function setup(httpServer) {
 
   io.on('connection', (socket) => {
     const userId = socket.userId;
+    socket.data.userId = userId;
     const wasOffline = !isOnline(userId);
     if (!online.has(userId)) online.set(userId, new Set());
     online.get(userId).add(socket.id);
@@ -277,17 +343,11 @@ async function setup(httpServer) {
     // as it opens (e.g. from tapping the call push notification). Small delay so
     // an app that just booted has time to attach its call handlers.
     setTimeout(() => {
-      if (!isOnline(userId)) return;
-      for (const [cid, call] of activeCalls) {
-        if (call.calleeId === userId && !call.answeredAt && !call.logged) {
-          const caller = db.prepare('SELECT * FROM users WHERE id = ?').get(call.callerId);
-          if (caller) {
-            io.to(`user:${userId}`).emit('call:incoming', {
-              from: publicUser(caller), callId: cid, media: call.media, chatId: call.chatId || null,
-            });
-          }
-        }
-      }
+      userHasSockets(userId).then((onlineNow) => {
+        if (!onlineNow) return;
+        deliverRingingCallsToUser(userId);
+        emitCluster('speedvox:call:deliver-ringing', userId);
+      }).catch(() => {});
     }, 800);
 
     // Client asks which of a list of users are currently online.
@@ -584,7 +644,7 @@ async function setup(httpServer) {
 
     // --- Voice / video call signaling (1:1 WebRTC) ---
     // The server only relays signaling; media flows peer-to-peer.
-    socket.on('call:invite', ({ to, callId, media, chatId }) => {
+    socket.on('call:invite', async ({ to, callId, media, chatId }) => {
       if (!to || !callId) return;
       const callMedia = media === 'video' ? 'video' : 'audio';
       // Blocking: cannot call a contact you blocked (or who blocked you).
@@ -593,7 +653,7 @@ async function setup(httpServer) {
         return;
       }
 
-      const calleeOnline = isOnline(to);
+      const calleeOnline = await userHasSockets(to);
       // App closed AND no way to wake them (no Web Push and no native FCM token):
       // tell the caller immediately instead of ringing into the void.
       const canWake = push.hasSubscription(to) || fcm.tokensFor(to).length > 0;
@@ -630,13 +690,13 @@ async function setup(httpServer) {
       }
     });
     socket.on('call:accept', ({ to, callId }) => {
-      const call = activeCalls.get(callId);
-      if (call) { call.answeredAt = now(); if (call.ringTimer) clearTimeout(call.ringTimer); }
+      markCallAnswered(callId);
+      emitCluster('speedvox:call:answered', callId);
       io.to(`user:${to}`).emit('call:accepted', { from: userId, callId });
     });
     socket.on('call:reject', ({ to, callId }) => {
       io.to(`user:${to}`).emit('call:rejected', { from: userId, callId });
-      logCall(callId, 'rejected');
+      logCallEverywhere(callId, 'rejected');
     });
     socket.on('call:sdp', ({ to, callId, sdp }) => {
       io.to(`user:${to}`).emit('call:sdp', { from: userId, callId, sdp });
@@ -646,8 +706,7 @@ async function setup(httpServer) {
     });
     socket.on('call:end', ({ to, callId }) => {
       io.to(`user:${to}`).emit('call:ended', { from: userId, callId });
-      const call = activeCalls.get(callId);
-      if (call) logCall(callId, call.answeredAt ? 'completed' : 'canceled');
+      logCallEverywhere(callId, null);
     });
 
     // --- Group calls: full-mesh WebRTC over a per-chat call room ---
@@ -690,20 +749,19 @@ async function setup(httpServer) {
         set.delete(socket.id);
         if (set.size === 0) {
           online.delete(userId);
-          db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(now(), userId);
-          broadcastPresence(userId, 'offline');
-          // End any 1:1 call this user was part of.
-          for (const [cid, call] of activeCalls) {
-            if (call.callerId === userId || call.calleeId === userId) {
-              const other = call.callerId === userId ? call.calleeId : call.callerId;
-              io.to(`user:${other}`).emit('call:ended', { from: userId, callId: cid });
-              logCall(cid, call.answeredAt ? 'completed' : (call.calleeId === userId ? 'missed' : 'canceled'));
-            }
-          }
-          // Leave any group calls.
-          for (const [cid, room] of groupCalls) {
-            if (room.has(userId)) gcallLeave(cid, userId);
-          }
+          setTimeout(() => {
+            userHasSockets(userId).then((onlineNow) => {
+              if (onlineNow) return;
+              db.prepare('UPDATE users SET last_seen = ? WHERE id = ?').run(now(), userId);
+              broadcastPresence(userId, 'offline');
+              endCallsForOfflineUser(userId);
+              emitCluster('speedvox:call:user-offline', userId);
+              // Leave any group calls owned by this worker.
+              for (const [cid, room] of groupCalls) {
+                if (room.has(userId)) gcallLeave(cid, userId);
+              }
+            }).catch(() => {});
+          }, 250);
         }
       }
     });
