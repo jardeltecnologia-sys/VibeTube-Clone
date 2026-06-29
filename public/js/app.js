@@ -820,7 +820,11 @@ async function ensureChatKey(chat) {
   if (state.keyCache.has(chat.id)) return state.keyCache.get(chat.id);
   let pub = chat.otherUser.publicKey;
   if (!pub) {
-    try { const { user } = await api.getUser(chat.otherUser.id); pub = user.publicKey; } catch {}
+    try {
+      const { user } = await api.getUser(chat.otherUser.id);
+      pub = user.publicKey;
+      chat.otherUser.publicKey = pub || null;
+    } catch {}
   }
   const key = pub ? await e2ee.deriveChatKey(pub) : null;
   state.keyCache.set(chat.id, key);
@@ -860,6 +864,18 @@ async function loadRatchet(chat) {
 
 async function saveRatchet(chatId, st) {
   localStorage.setItem(ratchetKey(chatId), await ratchet.serialize(st));
+}
+
+async function resetChatCryptoSession(chat) {
+  if (!chat || !chat.id) return;
+  try { localStorage.removeItem(ratchetKey(chat.id)); } catch {}
+  try { state.keyCache.delete(chat.id); } catch {}
+  if (chat.otherUser && chat.otherUser.id) {
+    try {
+      const { user } = await api.getUser(chat.otherUser.id);
+      chat.otherUser.publicKey = user.publicKey || null;
+    } catch {}
+  }
 }
 
 // Returns a v2 envelope string, or null if the ratchet cannot send yet.
@@ -1982,7 +1998,7 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
     return true;
   } catch (err) {
     console.error('sendTextMessageFromComposer', err);
-    toast('Falha ao enviar mensagem. Tente novamente.');
+    toast(err && err.crypto ? err.message : 'Falha ao enviar mensagem. Tente novamente.');
     requestAnimationFrame(() => input.focus());
     return false;
   } finally {
@@ -1994,24 +2010,44 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
 // Ratchet, falls back to the static key, else plaintext. Returns the body to
 // send plus whether it's encrypted and the plaintext (for the local echo).
 async function encryptOutgoing(chat, body) {
-  if (chat && chat.type === 'direct') {
-    try {
-      const ratEnv = await ratchetEncryptFor(chat, body);
-      if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
-    } catch (err) {
-      console.warn('Double Ratchet encrypt failed; resetting this chat session', err);
-      try { localStorage.removeItem(ratchetKey(chat.id)); } catch {}
-      try { state.keyCache.delete(chat.id); } catch {}
-    }
-
-    try {
-      const key = await ensureChatKey(chat);
-      if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
-    } catch (err) {
-      console.warn('Static E2EE encrypt failed; sending plaintext fallback', err);
-      try { state.keyCache.delete(chat.id); } catch {}
-    }
+  if (!chat || chat.type !== 'direct') {
+    return { body, encrypted: false, plainText: undefined };
   }
+
+  const hadPeerKey = Boolean(chat.otherUser && chat.otherUser.publicKey);
+
+  try {
+    const ratEnv = await ratchetEncryptFor(chat, body);
+    if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
+  } catch (err) {
+    console.warn('Double Ratchet encrypt failed; resetting this chat session', err);
+    await resetChatCryptoSession(chat);
+  }
+
+  try {
+    const key = await ensureChatKey(chat);
+    if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
+  } catch (err) {
+    console.warn('Static E2EE encrypt failed; refreshing peer key', err);
+    await resetChatCryptoSession(chat);
+  }
+
+  const peerHasKey = Boolean(chat.otherUser && chat.otherUser.publicKey);
+  if (hadPeerKey || peerHasKey) {
+    try {
+      await resetChatCryptoSession(chat);
+      const recoveredKey = await ensureChatKey(chat);
+      if (recoveredKey) {
+        return { body: JSON.stringify(await e2ee.encrypt(recoveredKey, body)), encrypted: true, plainText: body };
+      }
+    } catch (err) {
+      console.warn('E2EE recovery failed', err);
+    }
+    const error = new Error('Erro de segurança: não foi possível criptografar a mensagem. A sessão foi renegociada; tente enviar novamente.');
+    error.crypto = true;
+    throw error;
+  }
+
   return { body, encrypted: false, plainText: undefined };
 }
 
@@ -2028,7 +2064,12 @@ async function scheduleCurrentMessage() {
     const ts = new Date(when.value).getTime();
     if (!ts || ts < Date.now() + 5000) return toast('Escolha um horário no futuro');
     const chat = state.chats.get(state.activeChatId);
-    const enc = await encryptOutgoing(chat, body);
+    let enc;
+    try {
+      enc = await encryptOutgoing(chat, body);
+    } catch (err) {
+      return toast(err && err.crypto ? err.message : 'Falha ao preparar mensagem');
+    }
     const payload = { chatId: state.activeChatId, type: 'text', body: enc.body, sendAt: ts };
     if (enc.encrypted) payload.encrypted = true;
     state.socket.emit('message:send', payload, (res) => {
