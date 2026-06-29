@@ -30,6 +30,20 @@ public class MainActivity extends BridgeActivity {
             }
         }
 
+        // Microfone e câmera: ESSENCIAIS para as chamadas de voz/vídeo. Sem a
+        // permissão concedida, o WebView nega o getUserMedia e o áudio nunca é
+        // capturado (o outro lado fica sem ouvir). Pedimos logo na abertura.
+        java.util.List<String> media = new java.util.ArrayList<>();
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            media.add(Manifest.permission.RECORD_AUDIO);
+        }
+        if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            media.add(Manifest.permission.CAMERA);
+        }
+        if (!media.isEmpty()) {
+            requestPermissions(media.toArray(new String[0]), 9202);
+        }
+
         // Android 14+ (API 34): a chamada em tela cheia exige permissão especial
         // ("Notificações em tela cheia"). Se ainda não foi concedida, leva o
         // usuário direto pra tela de liberar — senão a chamada vem só como
