@@ -124,6 +124,19 @@ const config = {
 config.emailVerification = Boolean(config.smtp.host) || config.emailTestMode;
 
 
+function expandTurnUrls(raw) {
+  return [...new Set(String(raw || '')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean)
+    .flatMap((url) => {
+      if (/^turn:/i.test(url) && !/[?&]transport=/i.test(url)) {
+        return [url, `${url}${url.includes('?') ? '&' : '?'}transport=tcp`];
+      }
+      return [url];
+    }))];
+}
+
 // Assemble the ICE server list sent to clients. STUN finds public addresses;
 // TURN relays media when peers can't reach each other directly (restrictive
 // NAT / mobile CGNAT) — without a TURN, those calls fail to connect.
@@ -134,7 +147,7 @@ config.iceServers = (() => {
   if (config.turnUrl) {
     // Private TURN (recommended for production): set TURN_URL/USERNAME/CREDENTIAL.
     list.push({
-      urls: config.turnUrl,
+      urls: expandTurnUrls(config.turnUrl),
       username: config.turnUsername || undefined,
       credential: config.turnCredential || undefined,
     });
