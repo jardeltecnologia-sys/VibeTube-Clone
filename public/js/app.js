@@ -490,6 +490,7 @@ async function connectSocket() {
     setServerReachable(true);
     updateNetIndicator();
     flushOutbox();
+    loadChats().then(() => syncActiveMessagesSoon()).catch(() => {});
     // Internet is back: keep the mesh device registry fresh (best-effort).
     offline.registerDevice().catch(() => {});
   });
@@ -523,7 +524,12 @@ async function connectSocket() {
     if (!summary) return;
     state.chats.set(summary.id, summary);
     renderChatList();
-    if (summary.id === state.activeChatId) renderChatHeader(summary);
+    if (summary.id === state.activeChatId) {
+      renderChatHeader(summary);
+      const list = state.messages.get(summary.id) || [];
+      const last = summary.lastMessage;
+      if (last && !list.some((m) => m.id === last.id)) syncActiveMessagesSoon();
+    }
   });
 
   socket.on('chat:removed', ({ chatId }) => {
@@ -980,7 +986,16 @@ async function reloadActiveMessages(silent) {
   if (!state.activeChatId) return;
   const { messages } = await api.getMessages(state.activeChatId);
   state.messages.set(state.activeChatId, messages);
+  for (const m of messages) if (m.encrypted && m._plain == null) decryptInto(m);
   renderMessages(silent);
+}
+
+function syncActiveMessagesSoon() {
+  if (!state.activeChatId) return;
+  clearTimeout(syncActiveMessagesSoon._timer);
+  syncActiveMessagesSoon._timer = setTimeout(() => {
+    reloadActiveMessages(true).catch(() => {});
+  }, 200);
 }
 
 function addMessage(message, clientId) {
