@@ -2829,14 +2829,18 @@ async function sendMediaViaMesh({ file, type, mediaName }) {
 async function deliverMedia({ file, type, mediaName, onProgress } = {}) {
   if (!state.activeChatId) return false;
 
-  // E2EE de mídia (Lote 2): em chat direto com cripto pronta, cifra os bytes e
-  // sobe SÓ o blob cifrado. A chave vai no corpo E2EE. Aditivo: se não der,
-  // segue o caminho antigo (plaintext).
   const chat = state.chats.get(state.activeChatId);
+  // Arquivos grandes (>20 MB) vão em PEDAÇOS — furam o limite ~100 MB do
+  // Cloudflare e o nginx só precisa aceitar o tamanho do pedaço.
+  const isLarge = file.size > 20 * 1024 * 1024;
+
+  // E2EE de mídia (Lote 2): só p/ arquivos pequenos em chat direto — cifrar 1 GB
+  // de uma vez estouraria a memória do WebView. Mídia grande vai em pedaços SEM
+  // E2EE por ora (cifra em streaming fica pra depois).
   let enc = null;
   let uploadFile = file;
   try {
-    if (state.e2eeReady && chat && chat.type === 'direct' && chat.otherUser) {
+    if (!isLarge && state.e2eeReady && chat && chat.type === 'direct' && chat.otherUser) {
       const key = await ensureChatKey(chat);
       if (key) {
         const r = await encryptFileBytes(file);
@@ -2848,7 +2852,9 @@ async function deliverMedia({ file, type, mediaName, onProgress } = {}) {
 
   let uploadErr = null;
   try {
-    const up = onProgress ? await api.uploadWithProgress(uploadFile, onProgress) : await api.upload(uploadFile);
+    const up = isLarge
+      ? await api.uploadChunked(file, onProgress)
+      : (onProgress ? await api.uploadWithProgress(uploadFile, onProgress) : await api.upload(uploadFile));
     setServerReachable(true);
     await queueUploadedMedia(up, file, type, mediaName, enc);
     updateNetIndicator();
