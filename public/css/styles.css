@@ -1017,3 +1017,29 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .msg-actions svg { width: 15px; height: 15px; }
 .chat-item-menu { display: inline-flex; align-items: center; justify-content: center; }
 .call-log-btn svg { display: block; }
+
+/* ---- Micro-interações (CSS puro, sem framework) ---- */
+@keyframes sv-modal-in { from { opacity: 0; transform: translateY(10px) scale(.985); } to { opacity: 1; transform: none; } }
+@keyframes sv-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sv-pop-in { from { opacity: 0; transform: translateY(-5px) scale(.96); } to { opacity: 1; transform: none; } }
+
+/* Superfícies que surgem: entrada suave (aparecem uma vez, sem replay). */
+.modal { animation: sv-modal-in .2s cubic-bezier(.2,.8,.2,1); }
+.modal-backdrop { animation: sv-fade-in .16s ease; }
+.popup-menu, .emoji-popup, .mention-suggest, .gcall-incoming { animation: sv-pop-in .15s cubic-bezier(.2,.8,.2,1); }
+
+/* Feedback visual ao tocar (afunda levemente — casa com o haptic). */
+.msg-actions button:active, .call-btn:active, .popup-item:active, .user-result:active,
+.emoji-opt:active, .auth-tab:active, .call-log-btn:active, .chat-item-menu:active { transform: scale(.93); }
+.send-btn:active, .fab:active { transform: scale(.9); }
+
+/* Reações "pulam" com um leve overshoot ao passar o dedo. */
+.emoji-opt { transition: transform .16s cubic-bezier(.2,1.5,.4,1), background-color .12s ease; }
+.emoji-opt:hover { transform: scale(1.25); }
+.msg-reactions { transition: transform .12s ease; }
+.msg-reactions:active { transform: scale(.9); }
+
+/* Acessibilidade: respeita quem pediu menos animação no sistema. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
+}
