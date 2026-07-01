@@ -1011,3 +1011,9 @@ input, textarea { font-family: inherit; font-size: 15px; }
    pra desfocar; discreto o suficiente pra não pesar. */
 .chat-header { background: rgba(255,255,255,.82); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
 .composer { background: rgba(255,255,255,.86); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
+
+/* Ícones Lucide (traço) nos botões de ação — tamanho consistente e centrados. */
+.msg-actions button { display: inline-flex; align-items: center; justify-content: center; }
+.msg-actions svg { width: 15px; height: 15px; }
+.chat-item-menu { display: inline-flex; align-items: center; justify-content: center; }
+.call-log-btn svg { display: block; }

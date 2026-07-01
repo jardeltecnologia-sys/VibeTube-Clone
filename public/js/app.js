@@ -56,6 +56,28 @@ function el(tag, props = {}, ...children) {
   return node;
 }
 
+// Ícones Lucide (SVG de traço, currentColor) — substituem emojis por um visual
+// profissional e consistente. Uso: icon('trash'), icon('star', { fill: true }).
+const ICON_PATHS = {
+  reply: '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+  forward: '<polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V5a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
+  task: '<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
+  'more-vertical': '<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>',
+  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
+  video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
+  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+};
+function icon(name, { size = 20, fill = false } = {}) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
+  return tpl.content.firstElementChild;
+}
+
 const SERVER_REACHABLE_TTL_MS = 30000;
 const HEALTH_TIMEOUT_MS = 3500;
 let healthProbe = null;
@@ -1166,7 +1188,7 @@ function chatItemNode(chat) {
     : '';
 
   const menuBtn = el('button', { class: 'chat-item-menu', title: 'Opções',
-    onclick: (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, chat); } }, '⋮');
+    onclick: (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, chat); } }, icon('more-vertical', { size: 18 }));
 
   return el('li', {
     class: `chat-item${chat.id === state.activeChatId ? ' active' : ''}`,
@@ -1359,7 +1381,7 @@ function callMessageNode(m) {
   const chat = state.chats.get(m.chatId);
   const callBack = el('button', { class: 'call-log-btn', title: 'Ligar de volta',
     onclick: () => { if (chat && chat.otherUser) state.calls.startCall(chat.otherUser, c.media); } },
-    c.media === 'video' ? '🎥' : '📞');
+    icon(c.media === 'video' ? 'video' : 'phone', { size: 17 }));
   const mine = m.senderId === state.me.id;
   const dir = mine ? '↗' : '↙'; // feita / recebida
   return el('div', { class: `call-log${missed ? ' missed' : ''}` },
@@ -1608,15 +1630,15 @@ function renderMessages(keepScroll) {
     const myRole = (chat.members.find((x) => x.id === state.me.id) || {}).role;
     const canPin = !m.deleted && (chat.type === 'direct' || myRole === 'admin');
     const actions = el('div', { class: 'msg-actions' },
-      m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
-      m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, '😊'),
-      m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, m.starred ? '★' : '☆'),
-      m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
-      canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, '📌') : '',
-      m.deleted ? '' : el('button', { title: 'Criar Tarefa', onclick: () => createTaskFromMessage(m) }, '📋'),
+      m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, icon('reply')),
+      m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, icon('smile')),
+      m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, icon('star', { fill: m.starred })),
+      m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, icon('forward')),
+      canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, icon('pin')) : '',
+      m.deleted ? '' : el('button', { title: 'Criar Tarefa', onclick: () => createTaskFromMessage(m) }, icon('task')),
       mine && !m.deleted && m.type === 'text'
-        ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
-      mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, '🗑') : '');
+        ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, icon('edit')) : '',
+      mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, icon('trash')) : '');
     parts.push(actions);
 
     container.append(el('div', { class: `msg ${mine ? 'out' : 'in'}`, 'data-mid': m.id }, ...parts));
