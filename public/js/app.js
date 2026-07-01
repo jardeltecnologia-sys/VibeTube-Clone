@@ -80,6 +80,9 @@ const ICON_PATHS = {
   archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
   bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
   'bell-off': '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><line x1="1" y1="1" x2="23" y2="23"/>',
+  'map-pin': '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
+  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
+  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5 21 2m-4 4 2.5 2.5M14 9l2.5 2.5"/>',
 };
 function icon(name, { size = 20, fill = false } = {}) {
   const tpl = document.createElement('template');
@@ -362,6 +365,10 @@ function lastMessagePreview(m) {
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
   if (m.type === 'poll') return `📊 ${(m.poll && m.poll.question) || 'Enquete'}`;
+  if (m.type === 'location') return '📍 Localização';
+  if (m.type === 'contact') return '👤 Contato';
+  if (m.type === 'event') return '📅 Evento';
+  if (m.type === 'pix') return '💠 Pix';
   if (m.type === 'call') return callLabel(m);
   if (m.type === 'system') return m.body || '';
   if (m.encrypted) {
@@ -1689,9 +1696,18 @@ function renderMessages(keepScroll) {
         ));
       } else if (m.type === 'poll' && m.poll) {
         parts.push(pollNode(m));
+      } else if (m.type === 'location') {
+        parts.push(locationNode(m));
+      } else if (m.type === 'contact') {
+        parts.push(contactCardNode(m));
+      } else if (m.type === 'event') {
+        parts.push(eventNode(m));
+      } else if (m.type === 'pix') {
+        parts.push(pixNode(m));
       }
-      const text = m.type === 'poll' ? null : displayText(m);
-      if (m.encrypted && text == null && m.type !== 'poll') {
+      const CARD_TYPES = ['poll', 'location', 'contact', 'event', 'pix'];
+      const text = CARD_TYPES.includes(m.type) ? null : displayText(m);
+      if (m.encrypted && text == null && !CARD_TYPES.includes(m.type)) {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
@@ -2508,6 +2524,144 @@ function pollComposeModal() {
 }
 
 // Render a poll bubble with live results; tapping an option votes.
+// ---------------------------------------------- anexos: cartões (novos tipos)
+// Corpo dos cartões (location/contact/event/pix) — JSON, cifrado como texto em
+// chats E2EE. Lê do _plain (decifrado) ou do body (em claro).
+function cardData(m) {
+  const raw = m.encrypted ? m._plain : m.body;
+  if (raw == null) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+
+// Envia um cartão: monta o JSON, cifra igual a texto e envia pelo fluxo normal.
+async function sendCard(type, data) {
+  const chat = state.chats.get(state.activeChatId);
+  if (!chat) return toast('Abra uma conversa primeiro');
+  const enc = await encryptOutgoing(chat, JSON.stringify(data));
+  const payload = { chatId: chat.id, type, body: enc.body };
+  if (enc.encrypted) payload.encrypted = true;
+  queueAndSend(payload, enc.plainText);
+}
+
+function cardShell(iconName, title, ...children) {
+  return el('div', { class: 'attach-card' },
+    el('div', { class: 'attach-card-head' }, icon(iconName, { size: 18 }), el('span', {}, title)),
+    ...children);
+}
+
+// ---- Localização ----
+function sendLocationMessage() {
+  if (!navigator.geolocation) return toast('Localização indisponível neste aparelho');
+  toast('Obtendo localização…');
+  navigator.geolocation.getCurrentPosition(
+    (pos) => sendCard('location', { lat: +pos.coords.latitude.toFixed(6), lng: +pos.coords.longitude.toFixed(6) }),
+    () => toast('Não foi possível obter a localização (permissão negada?)'),
+    { enableHighAccuracy: true, timeout: 12000 });
+}
+function locationNode(m) {
+  const d = cardData(m);
+  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '📍 Localização');
+  const maps = `https://www.google.com/maps?q=${d.lat},${d.lng}`;
+  return cardShell('map-pin', 'Localização',
+    el('div', { class: 'attach-card-sub' }, `${d.lat}, ${d.lng}`),
+    el('a', { class: 'attach-card-btn', href: maps, target: '_blank', rel: 'noopener' }, 'Ver no mapa'));
+}
+
+// ---- Contato ----
+function shareContactModal() {
+  const directs = [...state.chats.values()].filter((c) => c.type === 'direct' && c.otherUser);
+  const list = el('div', {});
+  if (!directs.length) list.append(el('p', { class: 'auth-hint' }, 'Você ainda não tem contatos para compartilhar.'));
+  for (const c of directs) {
+    const u = c.otherUser;
+    const av = el('span', { class: 'avatar sm' }); avatarBg(av, u.avatarUrl, u.displayName);
+    list.append(el('div', { class: 'user-result', onclick: () => {
+      backdrop.remove();
+      sendCard('contact', { name: u.displayName, username: u.username || '', userId: u.id });
+    } }, av, el('div', { class: 'user-result-body' },
+      el('div', { class: 'user-result-name' }, u.displayName),
+      el('div', { class: 'user-result-sub' }, '@' + (u.username || '')))));
+  }
+  const backdrop = modalShell('Compartilhar contato', el('div', { class: 'modal-body' }, list));
+}
+function contactCardNode(m) {
+  const d = cardData(m);
+  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '👤 Contato');
+  const av = el('span', { class: 'avatar sm' }); avatarBg(av, null, d.name);
+  const open = d.userId ? el('button', { class: 'attach-card-btn', onclick: () => openChatWithUser(d.userId) }, 'Conversar') : '';
+  return el('div', { class: 'attach-card' },
+    el('div', { class: 'attach-card-head' }, icon('user', { size: 18 }), el('span', {}, 'Contato')),
+    el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:6px' }, av,
+      el('div', {}, el('div', { style: 'font-weight:600' }, d.name),
+        d.username ? el('div', { class: 'attach-card-sub' }, '@' + d.username) : '')),
+    open);
+}
+async function openChatWithUser(userId) {
+  try { const { chat } = await api.openDirect(userId); if (chat) { state.chats.set(chat.id, chat); renderChatList(); openChat(chat.id); } }
+  catch { toast('Não foi possível abrir a conversa'); }
+}
+
+// ---- Evento ----
+function eventComposeModal() {
+  const title = el('input', { type: 'text', placeholder: 'Título do evento' });
+  const when = el('input', { type: 'datetime-local' });
+  const place = el('input', { type: 'text', placeholder: 'Local (opcional)' });
+  const send = el('button', { class: 'btn-primary', onclick: () => {
+    if (!title.value.trim()) return toast('Dê um título ao evento');
+    const ts = when.value ? new Date(when.value).getTime() : 0;
+    if (!ts) return toast('Escolha data e hora');
+    backdrop.remove();
+    sendCard('event', { title: title.value.trim(), at: ts, place: place.value.trim() });
+  } }, 'Enviar evento');
+  const backdrop = modalShell('Novo evento', el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Título'), title,
+    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Quando'), when,
+    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Local'), place,
+    el('div', { style: 'margin-top:14px' }, send)));
+}
+function eventNode(m) {
+  const d = cardData(m);
+  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '📅 Evento');
+  const dt = d.at ? new Date(d.at) : null;
+  const dstr = dt ? dt.toLocaleString('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }) : '';
+  const gcal = dt ? `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(d.title)}&dates=${gcalDate(dt)}/${gcalDate(new Date(d.at + 3600000))}${d.place ? '&location=' + encodeURIComponent(d.place) : ''}` : '';
+  return cardShell('calendar', 'Evento',
+    el('div', { style: 'font-weight:600;margin-top:4px' }, d.title),
+    dstr ? el('div', { class: 'attach-card-sub' }, '🗓️ ' + dstr) : '',
+    d.place ? el('div', { class: 'attach-card-sub' }, '📍 ' + d.place) : '',
+    gcal ? el('a', { class: 'attach-card-btn', href: gcal, target: '_blank', rel: 'noopener' }, 'Adicionar à agenda') : '');
+}
+function gcalDate(d) { return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
+
+// ---- Pix ----
+function pixComposeModal() {
+  const key = el('input', { type: 'text', placeholder: 'Chave Pix (CPF, e-mail, telefone, aleatória)' });
+  const name = el('input', { type: 'text', placeholder: 'Nome do recebedor (opcional)', value: state.me ? state.me.displayName : '' });
+  const amount = el('input', { type: 'number', placeholder: 'Valor R$ (opcional)', step: '0.01', min: '0' });
+  const send = el('button', { class: 'btn-primary', onclick: () => {
+    if (!key.value.trim()) return toast('Informe a chave Pix');
+    backdrop.remove();
+    sendCard('pix', { key: key.value.trim(), name: name.value.trim(), amount: amount.value ? Number(amount.value) : null });
+  } }, 'Enviar Pix');
+  const backdrop = modalShell('Enviar Pix', el('div', { class: 'modal-body' },
+    el('div', { class: 'field-label' }, 'Chave Pix'), key,
+    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Recebedor'), name,
+    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Valor'), amount,
+    el('div', { style: 'margin-top:14px' }, send)));
+}
+function pixNode(m) {
+  const d = cardData(m);
+  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '💠 Pix');
+  const val = (d.amount != null) ? ('R$ ' + Number(d.amount).toFixed(2).replace('.', ',')) : '';
+  const copy = el('button', { class: 'attach-card-btn', onclick: async () => {
+    try { await navigator.clipboard.writeText(d.key); toast('Chave Pix copiada'); } catch { toast('Copie a chave manualmente'); }
+  } }, 'Copiar chave Pix');
+  return cardShell('key', 'Pix' + (val ? ' · ' + val : ''),
+    d.name ? el('div', { style: 'font-weight:600;margin-top:4px' }, d.name) : '',
+    el('div', { class: 'attach-card-sub', style: 'word-break:break-all' }, d.key),
+    copy);
+}
+
 function pollNode(m) {
   const poll = m.poll;
   const total = poll.votes.length;
@@ -2919,6 +3073,10 @@ function setupComposer() {
       ev.stopPropagation(); menu.remove(); fn();
     } }, icon(iconName, { size: 18 }), el('span', {}, label));
     menu.append(item('paperclip', 'Foto ou arquivo', () => $('#file-input').click()));
+    menu.append(item('map-pin', 'Localização', () => sendLocationMessage()));
+    menu.append(item('user', 'Contato', () => shareContactModal()));
+    menu.append(item('calendar', 'Evento', () => eventComposeModal()));
+    menu.append(item('key', 'Pix', () => pixComposeModal()));
     menu.append(item('chart', 'Enquete', () => pollComposeModal()));
     menu.append(item('clock', 'Agendar mensagem', () => scheduleCurrentMessage()));
     menu.append(item('calendar', 'Mensagens agendadas', () => showScheduledMessagesModal()));
