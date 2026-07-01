@@ -912,20 +912,74 @@ async function decryptInto(m) {
   let env = null;
   try { env = JSON.parse(m.body); } catch {}
   try {
+    let pt = null;
     if (env && env.v === 2) {
       // Forward-secret (Double Ratchet) message.
-      const pt = await ratchetDecryptFor(chat, env);
-      if (pt != null) { m._plain = pt; m._decryptFailed = false; }
-      else m._decryptFailed = true;
+      pt = await ratchetDecryptFor(chat, env);
     } else {
       // Legacy/static AES message (also used for edits/forwards).
       const key = await ensureChatKey(chat);
-      if (!key) m._decryptFailed = true;
-      else { m._plain = await e2ee.decrypt(key, m.body); m._decryptFailed = false; }
+      pt = key ? await e2ee.decrypt(key, m.body) : null;
     }
+    if (pt == null) { m._decryptFailed = true; }
+    else { applyDecryptedPlain(m, pt); m._decryptFailed = false; }
   } catch { m._decryptFailed = true; }
   if (m.chatId === state.activeChatId) renderMessages(true);
   renderChatList();
+}
+
+// Trata o texto decifrado. Para mídia E2EE (Lote 2), o "plaintext" é um envelope
+// JSON com a chave do arquivo (mk/iv) + nome/mime + legenda — não é texto visível.
+function applyDecryptedPlain(m, pt) {
+  if (['image', 'video', 'audio', 'file'].includes(m.type)) {
+    try {
+      const mv = JSON.parse(pt);
+      if (mv && mv.mk && mv.iv) {
+        m._mediaKeyB64 = mv.mk;
+        m._mediaIvB64 = mv.iv;
+        m._mediaEncrypted = true;
+        if (mv.name && !m.mediaName) m.mediaName = mv.name;
+        if (mv.mime && !m.mediaMime) m.mediaMime = mv.mime;
+        m._plain = mv.caption || '';
+        return;
+      }
+    } catch { /* não é envelope de mídia — trata como texto */ }
+  }
+  m._plain = pt;
+}
+
+// ---------------------------------------------- Lote 2: E2EE de mídia (anexos)
+// Cifra os BYTES do arquivo com uma chave aleatória por mídia; o servidor guarda
+// só o blob cifrado. A chave viaja no corpo E2EE da mensagem. Mídia antiga (sem
+// cifra) segue abrindo normalmente — mudança aditiva.
+function b64ToBytes(str) {
+  const bin = atob(str);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function encryptFileBytes(file) {
+  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const buf = await file.arrayBuffer();
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buf);
+  const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', key));
+  const encFile = new File([ct], (file.name || 'media') + '.enc', { type: 'application/octet-stream' });
+  return { encFile, mk: bytesToB64(rawKey), iv: bytesToB64(iv) };
+}
+
+// Baixa o blob cifrado e devolve um objectURL já decifrado para exibir.
+async function decryptMediaToUrl(m) {
+  const rawKey = b64ToBytes(m._mediaKeyB64);
+  const iv = b64ToBytes(m._mediaIvB64);
+  const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']);
+  const res = await fetch(mediaUrl(m.mediaUrl));
+  if (!res.ok) throw new Error('fetch falhou');
+  const ct = await res.arrayBuffer();
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  const blob = new Blob([pt], { type: m.mediaMime || 'application/octet-stream' });
+  return URL.createObjectURL(blob);
 }
 
 // Plaintext to display for a message (handles encrypted bodies).
@@ -1390,8 +1444,23 @@ function renderMessages(keepScroll) {
     if (m.deleted) {
       parts.push(el('div', { class: 'msg-body msg-deleted' }, '🚫 Esta mensagem foi apagada'));
     } else {
-      if (m.type === 'image' && m.mediaUrl) {
-        const mu = mediaUrl(m.mediaUrl);
+      const srcUrl = m._decryptedUrl || m._localMediaUrl || (m.mediaUrl ? mediaUrl(m.mediaUrl) : null);
+      const isMediaMsg = ['image', 'video', 'audio', 'file'].includes(m.type);
+      if (m.encrypted && isMediaMsg && m._decryptFailed) {
+        // Não conseguimos a chave (corpo E2EE) — não tente abrir o blob cifrado.
+        parts.push(el('div', { class: 'msg-media' }, '🔒 Mídia cifrada — não foi possível abrir'));
+      } else if (m._mediaEncrypted && !m._decryptedUrl) {
+        // Descriptografa o blob e re-renderiza quando pronto.
+        if (!m._mediaDecrypting && !m._mediaDecryptFailed) {
+          m._mediaDecrypting = true;
+          decryptMediaToUrl(m)
+            .then((u) => { m._decryptedUrl = u; m._mediaDecrypting = false; if (m.chatId === state.activeChatId) renderMessages(true); })
+            .catch(() => { m._mediaDecryptFailed = true; m._mediaDecrypting = false; if (m.chatId === state.activeChatId) renderMessages(true); });
+        }
+        parts.push(el('div', { class: 'msg-media' },
+          m._mediaDecryptFailed ? '🔒 Mídia cifrada — não foi possível abrir' : '🔒 Descriptografando…'));
+      } else if (m.type === 'image' && m.mediaUrl) {
+        const mu = srcUrl;
         const ext = (m.mediaName || m.mediaUrl || '').split('.').pop().toLowerCase();
         // SVG and some rare formats browsers may not display inline — open in new tab.
         const openable = !['svg','bmp','tiff','tif','raw','jxl'].includes(ext);
@@ -1413,7 +1482,7 @@ function renderMessages(keepScroll) {
           parts.push(wrap);
         }
       } else if (m.type === 'video' && m.mediaUrl) {
-        const vu = mediaUrl(m.mediaUrl);
+        const vu = srcUrl;
         const showVid = () => el('video', { class: 'msg-video', src: vu, controls: '',
           preload: 'metadata', playsinline: '' });
         if (autoDownloadOn()) {
@@ -1427,7 +1496,7 @@ function renderMessages(keepScroll) {
           parts.push(wrap);
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
-        const src = mediaUrl(m.mediaUrl);
+        const src = srcUrl;
         const audioNode = buildAudioPlayer(src, m.mediaName);
         if (m.transcription) {
           const transWrap = el('div', { class: 'msg-audio-transcription', style: 'margin-top: 8px; font-size: 13px; border-top: 1px dashed var(--border); padding-top: 8px;' });
@@ -1451,7 +1520,7 @@ function renderMessages(keepScroll) {
         const ic = fileIcon(m.mediaName, m.mediaMime);
         const sizeStr = m.mediaSize ? formatBytes(m.mediaSize) : '';
         parts.push(el('a', {
-          class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank',
+          class: 'msg-file', href: srcUrl, target: '_blank',
           download: m.mediaName || '',
         },
           el('span', { class: 'file-ic' }, ic),
@@ -1905,6 +1974,7 @@ function optimisticMessage(payload) {
     mediaUrl: payload.mediaUrl || null,
     mediaName: payload.mediaName || null,
     mediaMime: payload.mediaMime || null,
+    _localMediaUrl: payload._localMediaUrl || null,
     replyTo: payload.replyTo || null,
     mentions: payload.mentions || [],
     forwarded: Boolean(payload.forwarded),
@@ -2371,17 +2441,36 @@ function uploadErrorMessage(err, type, file) {
   return (err && err.message) || 'Falha no upload';
 }
 
-function queueUploadedMedia(up, file, type, mediaName) {
-  const finalType = detectMediaType(file, up.mime, type);
-  queueAndSend({
+async function queueUploadedMedia(up, file, type, mediaName, enc) {
+  const finalType = detectMediaType(file, enc ? enc.mime : up.mime, type);
+  const payload = {
     chatId: state.activeChatId,
     type: finalType,
     mediaUrl: up.url,
     mediaName: mediaName || up.name || file.name,
-    mediaMime: up.mime || file.type || 'application/octet-stream',
+    // Guarda o mime ORIGINAL (o upload cifrado é octet-stream) para o blob
+    // decifrado renderizar certo.
+    mediaMime: enc ? enc.mime : (up.mime || file.type || 'application/octet-stream'),
     replyTo: state.replyTo ? state.replyTo.id : undefined,
     ghostTtl: state.ghostModeActive ? 15 : undefined,
-  });
+  };
+
+  if (enc) {
+    const chat = state.chats.get(state.activeChatId);
+    const envelope = JSON.stringify({ v: 1, mk: enc.mk, iv: enc.iv, name: enc.name, mime: enc.mime, caption: '' });
+    let out;
+    try { out = await encryptOutgoing(chat, envelope); }
+    catch { toast('Falha ao cifrar a mídia; tente novamente.'); return; }
+    if (!out || !out.encrypted) { toast('Falha ao cifrar a mídia; tente novamente.'); return; }
+    payload.body = out.body;
+    payload.encrypted = true;
+    // Eco local do remetente: mostra o arquivo original (ele já o tem).
+    payload._localMediaUrl = URL.createObjectURL(file);
+    queueAndSend(payload, ''); // _plain='' evita tentar decifrar o próprio envio
+    return;
+  }
+
+  queueAndSend(payload);
 }
 
 async function sendMediaViaMesh({ file, type, mediaName }) {
@@ -2417,11 +2506,29 @@ async function sendMediaViaMesh({ file, type, mediaName }) {
 
 async function deliverMedia({ file, type, mediaName, onProgress } = {}) {
   if (!state.activeChatId) return false;
+
+  // E2EE de mídia (Lote 2): em chat direto com cripto pronta, cifra os bytes e
+  // sobe SÓ o blob cifrado. A chave vai no corpo E2EE. Aditivo: se não der,
+  // segue o caminho antigo (plaintext).
+  const chat = state.chats.get(state.activeChatId);
+  let enc = null;
+  let uploadFile = file;
+  try {
+    if (state.e2eeReady && chat && chat.type === 'direct' && chat.otherUser) {
+      const key = await ensureChatKey(chat);
+      if (key) {
+        const r = await encryptFileBytes(file);
+        enc = { mk: r.mk, iv: r.iv, name: mediaName || file.name, mime: file.type || 'application/octet-stream' };
+        uploadFile = r.encFile;
+      }
+    }
+  } catch { enc = null; uploadFile = file; }
+
   let uploadErr = null;
   try {
-    const up = onProgress ? await api.uploadWithProgress(file, onProgress) : await api.upload(file);
+    const up = onProgress ? await api.uploadWithProgress(uploadFile, onProgress) : await api.upload(uploadFile);
     setServerReachable(true);
-    queueUploadedMedia(up, file, type, mediaName);
+    await queueUploadedMedia(up, file, type, mediaName, enc);
     updateNetIndicator();
     return true;
   } catch (err) {
