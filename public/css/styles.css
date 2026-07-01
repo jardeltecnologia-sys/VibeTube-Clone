@@ -1039,6 +1039,10 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .msg-reactions { transition: transform .12s ease; }
 .msg-reactions:active { transform: scale(.9); }
 
+/* Itens de menu popup: ícone Lucide + texto alinhados. */
+.popup-item { display: flex; align-items: center; gap: 10px; }
+.popup-item svg { flex: 0 0 auto; color: var(--text-dim); }
+
 /* Acessibilidade: respeita quem pediu menos animação no sistema. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }

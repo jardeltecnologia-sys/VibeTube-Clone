@@ -71,6 +71,11 @@ const ICON_PATHS = {
   phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
   video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+  paperclip: '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
+  chart: '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
+  ghost: '<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>',
 };
 function icon(name, { size = 20, fill = false } = {}) {
   const tpl = document.createElement('template');
@@ -2786,16 +2791,16 @@ function setupComposer() {
   $('#attach-btn').onclick = (e) => {
     document.querySelector('.popup-menu')?.remove();
     const menu = el('div', { class: 'popup-menu' });
-    const item = (label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
+    const item = (iconName, label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
       ev.stopPropagation(); menu.remove(); fn();
-    } }, label);
-    menu.append(item('📎 Foto ou arquivo', () => $('#file-input').click()));
-    menu.append(item('📊 Enquete', () => pollComposeModal()));
-    menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
-    menu.append(item('📅 Mensagens agendadas', () => showScheduledMessagesModal()));
+    } }, icon(iconName, { size: 18 }), el('span', {}, label));
+    menu.append(item('paperclip', 'Foto ou arquivo', () => $('#file-input').click()));
+    menu.append(item('chart', 'Enquete', () => pollComposeModal()));
+    menu.append(item('clock', 'Agendar mensagem', () => scheduleCurrentMessage()));
+    menu.append(item('calendar', 'Mensagens agendadas', () => showScheduledMessagesModal()));
 
-    const ghostLabel = state.ghostModeActive ? '👻 Desativar Modo Fantasma' : '👻 Ativar Modo Fantasma';
-    menu.append(item(ghostLabel, () => {
+    const ghostLabel = state.ghostModeActive ? 'Desativar Modo Fantasma' : 'Ativar Modo Fantasma';
+    menu.append(item('ghost', ghostLabel, () => {
       state.ghostModeActive = !state.ghostModeActive;
       updateComposerPlaceholder();
       toast(state.ghostModeActive ? '👻 Modo Fantasma Ativado! (mensagem some em 15s após visualizada)' : '👻 Modo Fantasma Desativado');
