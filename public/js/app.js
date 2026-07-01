@@ -3227,6 +3227,46 @@ function settingsModal() {
   const testBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3)' }, '🔔 Testar toque');
   testBtn.onclick = () => { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 3500); };
 
+  // --- "chamada com app fechado" (FCM push) status indicator + Ativar/Testar ---
+  // Shows, live, whether this device is registered to receive full-screen calls
+  // while the app is closed, and lets the user re-run the registration on demand.
+  const FCM_STATUS_LABELS = {
+    ok:            { dot: '#22c55e', text: '✅ Registrado neste aparelho — chamadas chegam mesmo com o app fechado.' },
+    browser:       { dot: '#9ca3af', text: 'ℹ️ Você está no navegador. Instale o app (APK) para receber chamadas com o app fechado.' },
+    'no-auth':     { dot: '#f59e0b', text: '⚠️ Entre na sua conta para registrar este aparelho.' },
+    'empty-token': { dot: '#f59e0b', text: '⏳ O Google ainda não devolveu o código. Toque em "Ativar/Testar" de novo em instantes.' },
+    error:         { dot: '#ef4444', text: '❌ Não deu para registrar agora. Verifique a internet e tente novamente.' },
+    checking:      { dot: '#3b82f6', text: '⏳ Verificando…' },
+    unknown:       { dot: '#9ca3af', text: 'Toque em "Ativar/Testar" para verificar este aparelho.' },
+  };
+  const fcmDot = el('span', { style: 'display:inline-block;width:10px;height:10px;border-radius:50%;flex:0 0 auto' });
+  const fcmText = el('div', { class: 'field-label', style: 'flex:1;margin:0' });
+  const applyFcmStatus = (st) => {
+    const info = FCM_STATUS_LABELS[st && st.status] || FCM_STATUS_LABELS.unknown;
+    fcmDot.style.background = info.dot;
+    fcmText.textContent = info.text;
+  };
+  applyFcmStatus(lastFcmPushStatus);
+  const fcmTestBtn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' }, 'Ativar/Testar');
+  fcmTestBtn.onclick = async () => {
+    fcmTestBtn.disabled = true;
+    applyFcmStatus({ status: 'checking' });
+    try {
+      applyFcmStatus(await setupNativeCallPush());
+    } finally {
+      fcmTestBtn.disabled = false;
+    }
+  };
+  // Live updates: periodic auto-retries (focus/visibility/timers) broadcast the
+  // status too. The listener self-removes once this modal leaves the DOM.
+  const onFcmStatus = (e) => {
+    if (!fcmText.isConnected) { window.removeEventListener('speedvox:fcm-status', onFcmStatus); return; }
+    applyFcmStatus(e.detail);
+  };
+  window.addEventListener('speedvox:fcm-status', onFcmStatus);
+  // Kick a silent refresh on open; the result arrives via the event above.
+  setupNativeCallPush().catch(() => {});
+
   // --- mesh status line + toggle (make the mesh feature explicit) ---
   const peers = state.mesh ? state.mesh.status().peers : 0;
   const meshState = !state.mesh ? 'indisponível neste aparelho'
@@ -3250,6 +3290,11 @@ function settingsModal() {
       el('div', { class: 'field-label' }, '🎧 Qualidade de Áudio Estúdio (Opus Lossless)'),
       boolRow('speedvox_studio_audio', 'Ativado', 'Desativado')),
     el('div', { class: 'field-row' }, testBtn),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, '📞 Chamada com o app fechado (este aparelho)'),
+      fcmTestBtn),
+    el('div', { class: 'field-row', style: 'display:flex;align-items:center;gap:10px' },
+      fcmDot, fcmText),
     el('p', { class: 'auth-hint' },
       'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
 
@@ -4325,8 +4370,30 @@ async function startApp(user) {
   refreshStatusIndicator();
 }
 
+// Last known result of the native FCM registration so the Settings screen can
+// show — live — whether "chamada com app fechado" is armed on this device.
+// Possible status values: 'ok' | 'browser' | 'no-auth' | 'empty-token' | 'error'.
+let lastFcmPushStatus = { status: 'unknown', detail: null, at: 0 };
+
+// Store the latest FCM registration result and broadcast it so any open Settings
+// panel updates its indicator without polling. Returns the stored object so
+// setupNativeCallPush() callers can also read the outcome directly.
+function setFcmPushStatus(status, detail = null) {
+  lastFcmPushStatus = { status, detail, at: Date.now() };
+  try {
+    window.dispatchEvent(new CustomEvent('speedvox:fcm-status', { detail: lastFcmPushStatus }));
+  } catch {}
+  return lastFcmPushStatus;
+}
+
 // Native Android (Capacitor): register this device's FCM token so the server
 // can ring incoming calls in full screen even with the app closed.
+// Returns (and broadcasts) a { status, detail, at } result:
+//   ok          – token obtained and registered on the server
+//   browser     – no native call plugin (running in a plain browser/PWA)
+//   no-auth     – not signed in yet, so there is nothing to attach the token to
+//   empty-token – the plugin/Google returned no token (usually transient)
+//   error       – an exception was thrown while registering
 async function setupNativeCallPush() {
   try {
     const cap = window.Capacitor || null;
@@ -4350,12 +4417,12 @@ async function setupNativeCallPush() {
     // If the native plugin exists, try it.
     if (!plugin || !plugin.getToken) {
       console.warn('FCM_REGISTER_NO_PLUGIN');
-      return;
+      return setFcmPushStatus('browser');
     }
 
     if (!getToken || !getToken()) {
       console.warn('FCM_REGISTER_NO_AUTH_TOKEN');
-      return;
+      return setFcmPushStatus('no-auth');
     }
 
     const result = await plugin.getToken();
@@ -4368,13 +4435,15 @@ async function setupNativeCallPush() {
 
     if (!token) {
       console.warn('FCM_REGISTER_EMPTY_TOKEN');
-      return;
+      return setFcmPushStatus('empty-token');
     }
 
     await api.registerFcm(token);
     console.log('FCM_REGISTER_OK');
+    return setFcmPushStatus('ok', { tokenLength: String(token).length });
   } catch (err) {
     console.error('FCM_REGISTER_ERROR', err && (err.stack || err.message || err));
+    return setFcmPushStatus('error', { message: err && (err.message || String(err)) });
   }
 }
 
