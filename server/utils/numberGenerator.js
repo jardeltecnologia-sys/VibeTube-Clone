@@ -31,38 +31,32 @@ function generateBrazilianNumber() {
  * @returns {string} O novo número de celular VibeTube.
  */
 function assignUniqueVirtualNumber(userId) {
-    let isUnique = false;
-    let newNumber = '';
-    let attempts = 0;
-    const maxAttempts = 10; // Proteção contra loop infinito
-
-    // Loop de validação de unicidade
-    while (!isUnique && attempts < maxAttempts) {
-        newNumber = generateBrazilianNumber();
-        
-        // Verifica no banco de dados se alguém já tem este número
-        const stmt = db.prepare('SELECT id FROM users WHERE virtual_number = ?');
-        const existingUser = stmt.get(newNumber);
-        
-        // Se não encontrar nenhum utilizador, o número é único!
-        if (!existingUser) {
-            isUnique = true;
-        }
-        attempts++;
-    }
-
-    // Se por um milagre falhar 10 vezes
-    if (!isUnique) {
-        throw new Error('Falha ao gerar um número virtual único após várias tentativas.');
-    }
-
-    // Guarda o número no banco de dados associado a este utilizador
+    const maxAttempts = 12; // Proteção contra loop infinito
+    const checkStmt = db.prepare('SELECT 1 FROM users WHERE virtual_number = ?');
     const updateStmt = db.prepare('UPDATE users SET virtual_number = ? WHERE id = ?');
-    updateStmt.run(newNumber, userId);
 
-    console.log(`[VibeTube] Número virtual +55 ${newNumber} atribuído ao utilizador ${userId}`);
-    
-    return newNumber;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        const newNumber = generateBrazilianNumber();
+
+        // Pré-checagem rápida (evita a maioria das colisões).
+        if (checkStmt.get(newNumber)) continue;
+
+        try {
+            // A gravação em si é a garantia real: a coluna virtual_number é
+            // UNIQUE, então numa corrida (dois cadastros no mesmo instante) o
+            // segundo UPDATE dispara erro de UNIQUE e nós tentamos outro número.
+            updateStmt.run(newNumber, userId);
+            console.log(`[VibeTube] Número virtual +55 ${newNumber} atribuído ao utilizador ${userId}`);
+            return newNumber;
+        } catch (err) {
+            const msg = String(err && err.message || '');
+            if (/UNIQUE|constraint/i.test(msg)) continue; // colidiu na corrida — tenta de novo
+            throw err; // erro real (ex.: usuário inexistente) — propaga
+        }
+    }
+
+    // Se por um milagre falhar todas as tentativas.
+    throw new Error('Falha ao gerar um número virtual único após várias tentativas.');
 }
 
 module.exports = {
