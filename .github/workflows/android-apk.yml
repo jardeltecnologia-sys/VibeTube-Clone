@@ -71,7 +71,9 @@ jobs:
         working-directory: mobile/android
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon
+          # versionCode crescente (número do build) para o Android reconhecer
+          # como atualização; assinatura fixa vem do debug.keystore commitado.
+          ./gradlew assembleDebug --no-daemon -Pvcode=${{ github.run_number }} -Pvname=1.0.${{ github.run_number }}
 
       - name: Rename APK
         run: cp mobile/android/app/build/outputs/apk/debug/app-debug.apk speedvox-${{ github.run_number }}.apk
