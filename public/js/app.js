@@ -935,6 +935,79 @@ function displayText(m) {
   return null; // not yet decrypted (or failed)
 }
 
+// ---------------------------------------------------- identity verification
+// "Número de segurança" (safety number), estilo Signal: um valor derivado das
+// DUAS chaves de identidade. Se o servidor trocar a chave de alguém (ataque de
+// intermediário), o número muda — e os dois lados percebem ao comparar.
+async function jwkPubToRaw(jwkStr) {
+  const jwk = typeof jwkStr === 'string' ? JSON.parse(jwkStr) : jwkStr;
+  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
+  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
+}
+
+async function computeSafetyNumber(myPubStr, theirPubStr) {
+  const a = await jwkPubToRaw(myPubStr);
+  const b = await jwkPubToRaw(theirPubStr);
+  // Ordem independente: ordena as duas chaves cruas para os dois lados obterem
+  // exatamente o mesmo número.
+  const cmp = (x, y) => { const n = Math.min(x.length, y.length); for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
+  const [first, second] = cmp(a, b) <= 0 ? [a, b] : [b, a];
+  const combined = new Uint8Array(first.length + second.length);
+  combined.set(first, 0); combined.set(second, first.length);
+  // Alonga o cálculo um pouco (defesa em profundidade) e converte em dígitos.
+  let h = new Uint8Array(await crypto.subtle.digest('SHA-256', combined));
+  for (let i = 0; i < 4999; i++) h = new Uint8Array(await crypto.subtle.digest('SHA-256', h));
+  let digits = '';
+  let src = h;
+  while (digits.length < 60) {
+    for (const byte of src) { digits += (byte % 10); if (digits.length >= 60) break; }
+    if (digits.length < 60) src = new Uint8Array(await crypto.subtle.digest('SHA-256', src));
+  }
+  return digits.slice(0, 60).replace(/(\d{5})(?=\d)/g, '$1 ');
+}
+
+async function openSafetyNumber(chat) {
+  const mine = e2ee.myPublicKey();
+  let theirs = chat.otherUser && chat.otherUser.publicKey;
+  if (!theirs && chat.otherUser) {
+    try { const { user } = await api.getUser(chat.otherUser.id); theirs = user.publicKey; chat.otherUser.publicKey = theirs || null; } catch {}
+  }
+  if (!mine || !theirs) { toast('Ainda não há chaves de criptografia para este contato'); return; }
+
+  let number;
+  try { number = await computeSafetyNumber(mine, theirs); }
+  catch { toast('Não foi possível calcular o número de segurança'); return; }
+
+  const vkey = `speedvox_verified_${chat.otherUser.id}`;
+  const statusLine = el('div', { class: 'auth-hint', style: 'margin:0;text-align:center' });
+  const toggle = el('button', { class: 'btn-primary', style: 'margin-top:8px' });
+  const refresh = () => {
+    const v = localStorage.getItem(vkey);
+    if (v === number) statusLine.textContent = '✅ Verificado — a identidade confere.';
+    else if (v) statusLine.textContent = '⚠️ A chave mudou desde a verificação! Confirme com o contato por outro meio.';
+    else statusLine.textContent = 'Ainda não verificado. Compare os dígitos abaixo com os do contato.';
+    toggle.textContent = v === number ? 'Remover verificação' : 'Marcar como verificado';
+  };
+  toggle.onclick = () => {
+    if (localStorage.getItem(vkey) === number) localStorage.removeItem(vkey);
+    else localStorage.setItem(vkey, number);
+    refresh();
+  };
+  refresh();
+
+  const qr = el('div', { style: 'display:flex;justify-content:center;margin:12px 0' });
+  try { qr.innerHTML = qrSVG(`speedvox-sn:${number.replace(/ /g, '')}`, { size: 200, margin: 4 }); } catch {}
+
+  const body = el('div', { class: 'modal-body' },
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      `Compare estes 60 dígitos (ou o QR) com os que ${chat.otherUser.displayName} vê no aparelho dele. Se forem idênticos, ninguém está no meio da conversa.`),
+    qr,
+    el('div', { style: 'font-family:monospace;font-size:18px;letter-spacing:1px;line-height:1.9;text-align:center;word-break:break-word' }, number),
+    el('div', { style: 'margin-top:12px' }, statusLine),
+    toggle);
+  modalShell('🔐 Número de segurança', body);
+}
+
 // ------------------------------------------------------------------ data load
 async function loadChats() {
   try {
@@ -3160,15 +3233,65 @@ function securitySection() {
       el('div', { class: 'field-label' }, `Bloqueio do app (PIN / digital): ${status}`),
       lockBtns),
     el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, 'Backup das conversas'),
+      el('div', { class: 'field-label' }, 'Backup das conversas (criptografado)'),
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => exportBackup() },
-        '💾 Fazer backup (exportar)')),
+        '💾 Fazer backup (com senha)')),
     el('p', { class: 'auth-hint', style: 'margin-top:0' },
-      'O backup baixa um arquivo com suas conversas abertas, pra você guardar onde quiser.'));
+      'O backup baixa um arquivo protegido por senha (.speedvox). Sem a senha, o arquivo é ilegível — nem nós conseguimos abrir. Guarde a senha em lugar seguro.'));
 }
 
 // Exporta as conversas carregadas num arquivo (backup local).
-function exportBackup() {
+// Base64 seguro para arrays grandes (evita estourar a pilha do String.fromCharCode).
+function bytesToB64(u8) {
+  let s = '';
+  const CH = 0x8000;
+  for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
+  return btoa(s);
+}
+
+// Cifra o backup com uma senha do usuário (PBKDF2 + AES-GCM). Sem a senha o
+// arquivo é ilegível — nem o servidor, nem nós conseguimos abrir.
+async function encryptBackupBlob(jsonStr, password) {
+  const enc = new TextEncoder();
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const iters = 210000;
+  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
+  const key = await crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: iters, hash: 'SHA-256' },
+    baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(jsonStr)));
+  return JSON.stringify({
+    app: 'SpeedVox', format: 'speedvox-encrypted-backup', v: 1,
+    kdf: { name: 'PBKDF2', hash: 'SHA-256', iters, salt: bytesToB64(salt) },
+    iv: bytesToB64(iv), ct: bytesToB64(ct),
+  });
+}
+
+// Pequeno modal de senha; resolve com a senha (>=6) ou null se cancelar.
+function askPassword(title, hint) {
+  return new Promise((resolve) => {
+    const input = el('input', { type: 'password', placeholder: 'Senha do backup', style: 'width:100%' });
+    const confirm = el('button', { class: 'btn-primary', style: 'margin-top:12px' }, 'Confirmar');
+    const body = el('div', { class: 'modal-body' },
+      el('h3', { style: 'margin-top:0' }, title),
+      el('p', { class: 'auth-hint', style: 'margin-top:0' }, hint),
+      input, confirm);
+    const backdrop = modalShell('Backup seguro', body);
+    let done = false;
+    confirm.onclick = () => {
+      const v = input.value;
+      if (!v || v.length < 6) { toast('Use uma senha de ao menos 6 caracteres'); return; }
+      done = true; backdrop.remove(); resolve(v);
+    };
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirm.click(); });
+    const origRemove = backdrop.remove.bind(backdrop);
+    backdrop.remove = () => { origRemove(); if (!done) resolve(null); };
+    setTimeout(() => input.focus(), 60);
+  });
+}
+
+async function exportBackup() {
   try {
     const data = { app: 'SpeedVox', exportadoEm: new Date().toISOString(),
       usuario: state.me ? state.me.displayName : '', conversas: [] };
@@ -3185,12 +3308,20 @@ function exportBackup() {
       });
       if (msgs.length) data.conversas.push({ nome, tipo: chat.type, mensagens: msgs });
     }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+
+    // Backup agora é SEMPRE criptografado com senha (fecha o vazamento de
+    // conversas em texto puro no arquivo exportado).
+    const pass = await askPassword('Proteger o backup',
+      'Escolha uma senha. Você vai precisar dela pra restaurar. Sem a senha o arquivo é ilegível — nem nós conseguimos abrir.');
+    if (!pass) return;
+
+    const encrypted = await encryptBackupBlob(JSON.stringify(data), pass);
+    const blob = new Blob([encrypted], { type: 'application/octet-stream' });
     const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: `speedvox-backup-${new Date().toISOString().slice(0, 10)}.json` });
+    const a = el('a', { href: url, download: `speedvox-backup-${new Date().toISOString().slice(0, 10)}.speedvox` });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast(`Backup gerado ✅ (${data.conversas.length} conversa(s))`);
+    toast(`Backup criptografado ✅ (${data.conversas.length} conversa(s))`);
   } catch (e) { toast('Falha ao gerar backup'); }
 }
 
@@ -3849,6 +3980,13 @@ function showChatInfo() {
       }) }, '＋ Salvar nos contatos');
   }
 
+  // Verificar identidade (número de segurança), estilo Signal — só chat direto.
+  let safetyBtn = '';
+  if (!isGroup && chat.otherUser) {
+    safetyBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-top:10px',
+      onclick: () => openSafetyNumber(chat) }, '🔐 Número de segurança (verificar)');
+  }
+
   const body = el('div', { class: 'modal-body' },
     big,
     titleNode,
@@ -3858,6 +3996,7 @@ function showChatInfo() {
     members,
     addBtn,
     saveContactBtn,
+    safetyBtn,
     blockBtn,
     leave);
   const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);

@@ -30,16 +30,20 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '2mb' }));
 
-// Simple request logging.
-app.use((req, res, next) => {
-  const t = Date.now();
-  res.on('finish', () => {
-    if (req.path.startsWith('/api')) {
-      console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - t}ms`);
-    }
+// Request logging is OFF by default: gravar método+rota+tempo de cada requisição
+// é METADADO (quem fez o quê e quando). Como buscamos o padrão Signal (guardar o
+// mínimo), só logamos quando explicitamente pedido para depurar (LOG_REQUESTS=1).
+if (process.env.LOG_REQUESTS === '1') {
+  app.use((req, res, next) => {
+    const t = Date.now();
+    res.on('finish', () => {
+      if (req.path.startsWith('/api')) {
+        console.log(`${req.method} ${req.path} ${res.statusCode} ${Date.now() - t}ms`);
+      }
+    });
+    next();
   });
-  next();
-});
+}
 
 // Disable HTTP caching for all API routes
 app.use('/api', (req, res, next) => {
