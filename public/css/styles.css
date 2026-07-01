@@ -1,30 +1,52 @@
 :root {
-  /* Tema claro (estilo WhatsApp light) — passa confiança e parece seguro. */
-  --bg: #f0f2f5;
+  /* Tema CLARO REFINADO — passa confiança, mas com acabamento profissional:
+     verde esmeralda mais rico, neutros mais limpos, sombras suaves e realistas
+     (nada de sombra preta pesada), raios e gradiente sutil. */
+  --bg: #eceff3;
   --panel: #ffffff;
-  --panel-2: #f0f2f5;
-  --panel-3: #e9edef;
-  --accent: #00a884;
-  --accent-dark: #008f6f;
-  --text: #111b21;
-  --text-dim: #667781;
-  --bubble-out: #d9fdd3;
+  --panel-2: #f4f6f8;
+  --panel-3: #e7ebef;
+  --accent: #0aa17c;
+  --accent-dark: #07805f;
+  --accent-2: #14b98c;
+  --accent-grad: linear-gradient(180deg, #14b98c 0%, #0a9c78 100%);
+  --accent-soft: #e6f6f0;
+  --on-accent: #ffffff;
+  --text: #0e1621;
+  --text-dim: #64757f;
+  --bubble-out: #d7f4d0;
   --bubble-in: #ffffff;
-  --divider: #e9edef;
-  --danger: #e5535f;
-  --chat-bg: #efeae2;
+  --divider: #edeff2;
+  --danger: #e0454f;
+  --chat-bg: #eae6df;
+
+  /* Elevação — sombras suaves em camadas (tom azulado-escuro, não preto puro). */
+  --shadow-sm: 0 1px 2px rgba(16,32,45,.06), 0 1px 1px rgba(16,32,45,.04);
+  --shadow-md: 0 4px 12px rgba(16,32,45,.08), 0 2px 4px rgba(16,32,45,.05);
+  --shadow-lg: 0 14px 40px rgba(16,32,45,.16), 0 4px 10px rgba(16,32,45,.06);
+  --shadow-accent: 0 4px 14px rgba(10,161,124,.32);
+
+  /* Raios consistentes. */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 html, body {
   height: 100%;
-  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Inter", "SF Pro Text", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: "cv11", "ss01";
+  letter-spacing: -0.006em;
   overflow: hidden;
 }
+h1, h2, h3, .sidebar-title, .chat-header-title { letter-spacing: -0.018em; }
 
 .hidden { display: none !important; }
 
@@ -901,3 +923,91 @@ input, textarea { font-family: inherit; font-size: 15px; }
     padding-right: 11px;
   }
 }
+
+/* ============================================================================
+   REPAGINAÇÃO PROFISSIONAL (claro refinado + verde refinado)
+   Bloco de polimento aditivo — refina o acabamento sem reescrever o layout.
+   ========================================================================== */
+
+/* Scrollbars finas e discretas (grande sinal de app profissional). */
+* { scrollbar-width: thin; scrollbar-color: rgba(16,32,45,.18) transparent; }
+*::-webkit-scrollbar { width: 9px; height: 9px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  background: rgba(16,32,45,.16); border-radius: 8px;
+  border: 2px solid transparent; background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: rgba(16,32,45,.30); background-clip: padding-box; }
+
+/* Transições suaves nos elementos interativos. */
+.btn-primary, .icon-btn, .send-btn, .fab, .chat-item, .user-result, .popup-item,
+.auth-tab, .avatar-btn, .call-btn, input, textarea, .select-input {
+  transition: background-color .15s ease, color .15s ease, box-shadow .15s ease,
+    transform .12s ease, border-color .15s ease, filter .15s ease;
+}
+
+/* Botões primários: verde em gradiente sutil, elevação leve, feedback ao tocar.
+   (Botões secundários definem a cor de fundo inline, então continuam cinza.) */
+.btn-primary { background: var(--accent-grad); border-radius: var(--radius); box-shadow: var(--shadow-sm); }
+.btn-primary:hover { background: var(--accent-grad); filter: brightness(1.06); transform: translateY(-1px); box-shadow: var(--shadow-md); }
+.btn-primary:active { transform: translateY(0); filter: brightness(.97); }
+
+/* Botões de ação verdes dedicados: ícone branco + sombra esverdeada. */
+.fab, .send-btn { background: var(--accent-grad); color: var(--on-accent); box-shadow: var(--shadow-accent); }
+.fab:hover { background: var(--accent-grad); filter: brightness(1.06); box-shadow: var(--shadow-lg); }
+.send-btn:hover { background: var(--accent-grad); color: var(--on-accent); filter: brightness(1.06); }
+.icon-btn:active { transform: scale(.92); }
+
+/* Abas do login em verde gradiente. */
+.auth-tab.active { background: var(--accent-grad); color: var(--on-accent); box-shadow: var(--shadow-sm); }
+
+/* Foco claro e elegante nos campos (anel verde suave). */
+.auth-form input:focus, .search-bar input:focus, .composer textarea:focus,
+.modal-body input:focus, .modal-body input[type=text]:focus,
+.modal-body input[type=search]:focus, .select-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(10,161,124,.16);
+}
+
+/* Superfícies flutuantes: sombra suave em vez de sombra preta pesada. */
+.auth-card { box-shadow: var(--shadow-lg); border-radius: var(--radius-lg); border: 1px solid var(--divider); }
+.modal { box-shadow: var(--shadow-lg); border-radius: var(--radius-lg); }
+.modal-backdrop { background: rgba(11,18,26,.42); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+.popup-menu, .emoji-popup, .mention-suggest, .gcall-incoming, .sos-banner { box-shadow: var(--shadow-lg); }
+
+/* Cabeçalhos e compositor: branco limpo com uma hairline (mais moderno). */
+.sidebar { box-shadow: var(--shadow-sm); }
+.sidebar-header, .chat-header { background: var(--panel); border-bottom: 1px solid var(--divider); }
+.composer { background: var(--panel); border-top: 1px solid var(--divider); }
+.search-bar input { border: 1px solid var(--divider); }
+
+/* Lista de conversas: hover suave e ativo com barra de destaque + fundo verde claro. */
+.chat-item { border-bottom: 1px solid var(--divider); }
+.chat-item:hover { background: var(--panel-2); }
+.chat-item.active { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent); }
+.avatar { box-shadow: 0 0 0 1px rgba(16,32,45,.05); }
+
+/* Balões de mensagem: cantos mais suaves + sombra sutil (dão profundidade). */
+.msg { border-radius: 10px; box-shadow: var(--shadow-sm); }
+.msg.in { border-top-left-radius: 4px; }
+.msg.out { border-top-right-radius: 4px; }
+
+/* Estado vazio: sem a borda verde grossa (parecia amador). */
+.empty-state { border-bottom: none; }
+
+/* Badge de não-lidas com leve elevação. */
+.badge { box-shadow: var(--shadow-sm); }
+
+/* Mais "respiro" e alvos de toque maiores (≥44px) — sensação premium.
+   O texto respira mais dentro das bolhas; os ícones ficam fáceis de acertar. */
+.msg { padding: 8px 12px 9px; }
+.icon-btn { width: 42px; height: 42px; }
+.chat-item { padding: 13px 14px; }
+.composer .icon-btn, #send-btn, #mic-btn { width: 44px; height: 44px; }
+.composer textarea { padding: 12px 16px; }
+.messages { padding-top: 18px; padding-bottom: 18px; gap: 3px; }
+
+/* Cabeçalho/compositor translúcidos (vidro fosco) — só onde há conteúdo atrás
+   pra desfocar; discreto o suficiente pra não pesar. */
+.chat-header { background: rgba(255,255,255,.82); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
+.composer { background: rgba(255,255,255,.86); backdrop-filter: saturate(1.4) blur(12px); -webkit-backdrop-filter: saturate(1.4) blur(12px); }
