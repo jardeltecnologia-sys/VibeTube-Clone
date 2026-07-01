@@ -117,17 +117,28 @@ public class IncomingCallActivity extends Activity {
 
         startRinging();
 
+        final String callId = getIntent().getStringExtra("callId");
+
         declineCol.getChildAt(0).setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) { stopRinging(); finish(); }
+            public void onClick(View v) {
+                stopRinging();
+                // Recusa PELO telecom quando houver Connection; senão só fecha.
+                SpeedvoxCallRegistry.decline(callId);
+                finish();
+            }
         });
         acceptCol.getChildAt(0).setOnClickListener(new View.OnClickListener() {
             public void onClick(View v) {
                 stopRinging();
-                Intent open = new Intent(IncomingCallActivity.this, MainActivity.class);
-                open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-                open.putExtra("speedvox_answer", true);
-                open.putExtra("callId", getIntent().getStringExtra("callId"));
-                startActivity(open);
+                // Atende PELO telecom quando houver Connection (ela abre o app).
+                // Sem Connection (fallback), abrimos o app diretamente.
+                if (!SpeedvoxCallRegistry.answer(callId)) {
+                    Intent open = new Intent(IncomingCallActivity.this, MainActivity.class);
+                    open.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+                    open.putExtra("speedvox_answer", true);
+                    open.putExtra("callId", callId);
+                    startActivity(open);
+                }
                 finish();
             }
         });

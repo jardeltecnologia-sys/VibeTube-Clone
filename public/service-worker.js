@@ -2,7 +2,7 @@
 // Network calls (/api, /socket.io, /uploads) always bypass the service worker.
 // The static shell is cached and updated with a Network-First strategy to avoid stale code.
 
-const CACHE = 'speedvox-shell-v28';
+const CACHE = 'speedvox-shell-v29';
 const SHELL = [
   '/',
   '/index.html',
@@ -53,10 +53,40 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// --- Web Push: show a notification for an incoming message ---
+// --- Web Push: incoming CALL vs regular message ---
+// A chamada é o mais próximo que a web chega do WhatsApp: notificação insistente
+// (requireInteraction), vibração e botões Atender/Recusar. A web NÃO abre tela
+// cheia sozinha (limite do navegador) — só o APK faz isso.
 self.addEventListener('push', (event) => {
   let data = {};
   try { data = event.data ? event.data.json() : {}; } catch { data = {}; }
+
+  if (data.type === 'call') {
+    const title = data.title || '📞 Chamada recebida';
+    event.waitUntil(
+      self.registration.showNotification(title, {
+        body: data.body || 'Chamada recebida pelo SpeedVox',
+        tag: data.tag || `call-${data.callId || ''}`,
+        renotify: true,
+        requireInteraction: true,
+        vibrate: [0, 1000, 600, 1000, 600, 1000],
+        data: {
+          type: 'call',
+          callId: data.callId || null,
+          media: data.media || 'audio',
+          chatId: data.chatId || null,
+        },
+        icon: '/icons/icon.svg',
+        badge: '/icons/icon.svg',
+        actions: [
+          { action: 'answer', title: '☎ Atender' },
+          { action: 'decline', title: '✕ Recusar' },
+        ],
+      })
+    );
+    return;
+  }
+
   const title = data.title || 'SpeedVox';
   event.waitUntil(
     self.registration.showNotification(title, {
@@ -70,10 +100,36 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// Focus (or open) the app and jump to the relevant chat when tapped.
+// Focus (or open) the app; for calls, route Atender/Recusar to the app.
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const chatId = event.notification.data && event.notification.data.chatId;
+  const d = event.notification.data || {};
+
+  if (d.type === 'call') {
+    const wantsDecline = event.action === 'decline';
+    event.waitUntil(
+      self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
+        const msg = {
+          type: wantsDecline ? 'decline-call' : 'answer-call',
+          callId: d.callId || null,
+          media: d.media || 'audio',
+        };
+        for (const client of clients) {
+          if ('focus' in client) {
+            client.postMessage(msg);
+            return wantsDecline ? undefined : client.focus();
+          }
+        }
+        // No open window: for "decline" there's nothing to do; for "answer"/tap,
+        // open the app pointing at the call so it reconnects and rings.
+        if (wantsDecline) return undefined;
+        return self.clients.openWindow(`/?action=answer&callId=${d.callId || ''}`);
+      })
+    );
+    return;
+  }
+
+  const chatId = d.chatId;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
       for (const client of clients) {

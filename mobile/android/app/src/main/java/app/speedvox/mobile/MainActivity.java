@@ -9,10 +9,13 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 
+import android.os.PowerManager;
+
 import com.getcapacitor.BridgeActivity;
 
 import app.speedvox.nearby.SpeedvoxNearbyPlugin;
 import app.speedvox.call.SpeedvoxCallPlugin;
+import app.speedvox.call.CallTelecom;
 
 public class MainActivity extends BridgeActivity {
     @Override
@@ -22,6 +25,14 @@ public class MainActivity extends BridgeActivity {
         // Native FCM token bridge (full-screen incoming calls).
         registerPlugin(SpeedvoxCallPlugin.class);
         super.onCreate(savedInstanceState);
+
+        // Paridade com WhatsApp: registra a conta telecom self-managed para as
+        // chamadas tocarem PELO sistema (UI nativa de ligação, tela de bloqueio).
+        try { CallTelecom.ensureRegistered(this); } catch (Exception ignored) {}
+
+        // Isenção de otimização de bateria: sem isso, o Android/fabricante congela
+        // o app no Doze e a chamada não chega de forma confiável. Pergunta 1x.
+        requestBatteryExemptionOnce();
 
         // Android 13+: permissão de notificações.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -58,5 +69,21 @@ public class MainActivity extends BridgeActivity {
                 } catch (Exception ignored) {}
             }
         }
+    }
+
+    // Pede isenção de otimização de bateria uma única vez por instalação (para
+    // não incomodar). Sem isso o processo pode ser congelado e perder chamadas.
+    private void requestBatteryExemptionOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return;
+        try {
+            PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+            if (pm == null || pm.isIgnoringBatteryOptimizations(getPackageName())) return;
+            android.content.SharedPreferences sp = getSharedPreferences("speedvox_setup", MODE_PRIVATE);
+            if (sp.getBoolean("battery_asked", false)) return;
+            sp.edit().putBoolean("battery_asked", true).apply();
+            Intent i = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {}
     }
 }

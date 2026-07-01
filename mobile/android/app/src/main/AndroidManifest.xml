@@ -52,6 +52,22 @@
             android:showWhenLocked="true"
             android:turnScreenOn="true"
             android:theme="@style/AppTheme.NoActionBarLaunch" />
+
+        <!-- PARIDADE COM WHATSAPP: chamada toca PELO sistema (Telecom self-managed).
+             UI nativa de ligação, tela de bloqueio, DnD/prioridade, Bluetooth. -->
+        <service
+            android:name="app.speedvox.call.SpeedvoxConnectionService"
+            android:permission="android.permission.BIND_TELECOM_CONNECTION_SERVICE"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.telecom.ConnectionService" />
+            </intent-filter>
+        </service>
+
+        <!-- Botões Atender/Recusar da notificação de chamada (CallStyle). -->
+        <receiver
+            android:name="app.speedvox.call.CallActionReceiver"
+            android:exported="false" />
     </application>
 
     <!-- Permissions -->
@@ -72,6 +88,12 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Paridade com WhatsApp: chamada pelo sistema (Telecom self-managed) e
+         isenção de otimização de bateria (não ser congelado no Doze e perder
+         a chamada — o WhatsApp também é isento). -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
     <!-- VibeTube Mesh (Nearby Connections): Bluetooth + BLE -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />

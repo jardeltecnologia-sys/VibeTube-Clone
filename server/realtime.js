@@ -127,6 +127,7 @@ async function setup(httpServer) {
     if (!call || call.logged) return;
     call.logged = true;
     if (call.ringTimer) clearTimeout(call.ringTimer);
+    if (call.pushRetry) clearInterval(call.pushRetry);
     activeCalls.delete(callId);
 
     // Both participants must be real users to record the call.
@@ -238,6 +239,10 @@ async function setup(httpServer) {
     if (call.ringTimer) {
       clearTimeout(call.ringTimer);
       call.ringTimer = null;
+    }
+    if (call.pushRetry) {
+      clearInterval(call.pushRetry);
+      call.pushRetry = null;
     }
   }
 
@@ -686,7 +691,18 @@ async function setup(httpServer) {
       } else {
         // App closed but reachable: wake the device via push. When it opens and
         // reconnects, the connection handler delivers this still-ringing call.
-        notifyIncomingCall(to, socket.user, callId, callMedia, chatId);
+        // Keep nudging every few seconds while it rings — a single dropped push
+        // shouldn't miss the call (parity with how WhatsApp keeps ringing).
+        const ring = () => {
+          const c = activeCalls.get(callId);
+          if (!c || c.answeredAt) return; // answered or gone -> stop
+          notifyIncomingCall(to, socket.user, callId, callMedia, chatId);
+        };
+        ring();
+        const pushRetry = setInterval(ring, 5000);
+        setTimeout(() => clearInterval(pushRetry), config.callRingMs);
+        const c = activeCalls.get(callId);
+        if (c) c.pushRetry = pushRetry;
       }
     });
     socket.on('call:accept', ({ to, callId }) => {

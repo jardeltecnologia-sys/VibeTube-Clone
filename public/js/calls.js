@@ -333,6 +333,15 @@ export class CallManager {
     this.callId = callId;
     this.media = media;
     this.role = 'callee';
+
+    // Recusa pendente (tocada na notificação do PWA antes do app reconectar):
+    // rejeita sem nem mostrar a tela de chamada.
+    if (window.state && window.state.pendingDeclineCallId === callId) {
+      window.state.pendingDeclineCallId = null;
+      this._reject();
+      return;
+    }
+
     this._showOverlay('incoming');
     this._setStatus(media === 'video' ? 'Chamada de vídeo recebida' : 'Chamada recebida');
     ringtone.startIncoming();

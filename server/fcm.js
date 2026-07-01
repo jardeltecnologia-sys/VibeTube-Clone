@@ -102,7 +102,14 @@ async function sendCall(userId, { caller, callId, media }) {
               callId: String(callId || ''),
               media: String(media || 'audio'),
             },
-            android: { priority: 'high' },
+            android: {
+              priority: 'high',
+              // Curto: um push de chamada não deve tocar minutos depois se ficou
+              // preso na fila. A janela de toque no servidor é ~45s.
+              ttl: '45s',
+              // Entrega mesmo antes do primeiro desbloqueio pós-reboot (direct boot).
+              direct_boot_ok: true,
+            },
           },
         }),
       });

@@ -3267,6 +3267,41 @@ function settingsModal() {
   // Kick a silent refresh on open; the result arrives via the event above.
   setupNativeCallPush().catch(() => {});
 
+  // --- "Prontidão de chamada" estilo WhatsApp (só no app nativo) ---
+  // Mostra o que já está liberado neste aparelho para a chamada tocar como o
+  // WhatsApp e oferece o botão pra liberar o que falta (bateria / tela cheia).
+  const readinessBox = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
+  const renderReadiness = async () => {
+    const cap = window.Capacitor || null;
+    const plugin = cap && cap.Plugins ? cap.Plugins.SpeedvoxCall : null;
+    readinessBox.textContent = '';
+    if (!plugin || !plugin.getCallReadiness) {
+      readinessBox.append(el('p', { class: 'auth-hint', style: 'margin:0' },
+        'ℹ️ Abra pelo app (APK) para ver e liberar tudo que faz a chamada tocar como no WhatsApp. No navegador isso não se aplica.'));
+      return;
+    }
+    let r = {};
+    try { r = await plugin.getCallReadiness(); } catch {}
+    const line = (ok, label, fixLabel, fixFn) => {
+      const row = el('div', { style: 'display:flex;align-items:center;gap:8px' },
+        el('span', { style: 'flex:0 0 auto' }, ok ? '✅' : '⚠️'),
+        el('div', { class: 'field-label', style: 'flex:1;margin:0' }, label));
+      if (!ok && fixFn) {
+        const b = el('button', { class: 'btn-primary', style: 'padding:6px 12px;margin:0' }, fixLabel);
+        b.onclick = async () => { try { await fixFn(); } catch {} setTimeout(renderReadiness, 1500); };
+        row.append(b);
+      }
+      return row;
+    };
+    readinessBox.append(
+      line(r.notifications, 'Notificações permitidas', null, null),
+      line(r.telecom, 'Tocar pelo sistema (estilo WhatsApp)', null, null),
+      line(r.fullScreen, 'Abrir em tela cheia (Android 14+)', 'Liberar', () => plugin.openFullScreenIntentSettings()),
+      line(r.battery, 'Não congelar no modo economia de bateria', 'Liberar', () => plugin.requestBatteryOptimizationExemption()),
+    );
+  };
+  renderReadiness();
+
   // --- mesh status line + toggle (make the mesh feature explicit) ---
   const peers = state.mesh ? state.mesh.status().peers : 0;
   const meshState = !state.mesh ? 'indisponível neste aparelho'
@@ -3297,6 +3332,11 @@ function settingsModal() {
       fcmDot, fcmText),
     el('p', { class: 'auth-hint' },
       'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
+
+    el('h3', { class: 'settings-section' }, '📞 Prontidão de chamada (estilo WhatsApp)'),
+    el('p', { class: 'auth-hint', style: 'margin-top:0' },
+      'Para a chamada tocar com o app no bolso — tela de bloqueio, vibração e som como uma ligação de verdade — o Android precisa liberar estes itens neste aparelho:'),
+    readinessBox,
 
     securitySection(),
 
@@ -4604,6 +4644,13 @@ async function boot() {
         state.pendingAnswerCallId = e.data.callId;
         if (state.calls && state.calls.callId === e.data.callId && state.calls.role === 'callee') {
           state.calls._accept();
+        }
+      }
+      if (e.data && e.data.type === 'decline-call' && e.data.callId) {
+        if (state.calls && state.calls.callId === e.data.callId && state.calls.role === 'callee') {
+          state.calls._reject();
+        } else {
+          state.pendingDeclineCallId = e.data.callId;
         }
       }
     });

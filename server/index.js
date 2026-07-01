@@ -66,7 +66,13 @@ app.use('/api/preview', require('./routes/preview'));
 
 app.get('/api/health', (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
-  res.json({ ok: true, app: 'speedvox', google: config.google.enabled, time: Date.now() });
+  // Diagnóstico: sem `fcm` habilitado, a chamada nativa (app fechado) NÃO toca —
+  // exige FCM_SERVICE_ACCOUNT no .env. `webPush` idem para o PWA (VAPID).
+  let fcm = false;
+  let webPush = false;
+  try { fcm = require('./fcm').isEnabled(); } catch { /* ignore */ }
+  try { webPush = require('./push').isEnabled(); } catch { /* ignore */ }
+  res.json({ ok: true, app: 'speedvox', google: config.google.enabled, fcm, webPush, time: Date.now() });
 });
 
 // WebRTC ICE servers (STUN + optional TURN) for calls and the mesh.
