@@ -2,6 +2,8 @@ package app.speedvox.call;
 
 import android.animation.ObjectAnimator;
 import android.app.Activity;
+import android.app.KeyguardManager;
+import android.content.Context;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.drawable.GradientDrawable;
@@ -192,6 +194,12 @@ public class IncomingCallActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true);
             setTurnScreenOn(true);
+            // Dispensa ativamente a tela de bloqueio (leva o usuário direto pra
+            // chamada, mesmo com senha/biometria) — como o WhatsApp faz.
+            KeyguardManager km = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+            if (km != null) {
+                try { km.requestDismissKeyguard(this, null); } catch (Exception ignored) {}
+            }
         }
         getWindow().addFlags(
             WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
