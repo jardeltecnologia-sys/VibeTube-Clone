@@ -4988,7 +4988,40 @@ async function startApp(user) {
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible') setupNativeCallPush();
   });
+  setupAndroidBackButton();
   refreshStatusIndicator();
+}
+
+// Botão físico "voltar" do Android: em vez de SAIR do app, volta uma tela
+// (fecha popup -> fecha modal -> sai da conversa -> na raiz, minimiza). Sair do
+// app fica só para o botão "Sair". Requer o plugin @capacitor/app.
+let _androidBackBound = false;
+function setupAndroidBackButton() {
+  if (_androidBackBound) return;
+  const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (!App || !App.addListener) return; // só no app nativo
+  _androidBackBound = true;
+  App.addListener('backButton', () => {
+    // 1. Menu/popup aberto -> fecha.
+    const pop = document.querySelector('.popup-menu, .emoji-popup, .mention-suggest');
+    if (pop) { pop.remove(); return; }
+    // 2. Modal aberto -> fecha o mais recente.
+    const modals = document.querySelectorAll('.modal-backdrop');
+    if (modals.length) { modals[modals.length - 1].remove(); return; }
+    // 3. Em chamada -> não faz nada (evita encerrar sem querer).
+    if (document.querySelector('.call-overlay:not(.hidden), .gcall-overlay:not(.hidden)')) return;
+    // 4. Dentro de uma conversa -> volta para a lista.
+    if (state.activeChatId) {
+      state.activeChatId = null;
+      $('#app').classList.remove('in-chat');
+      $('#chat-view').classList.add('hidden');
+      $('#empty-state').classList.remove('hidden');
+      renderChatList();
+      return;
+    }
+    // 5. Na raiz -> MINIMIZA (nunca sai; sair só pelo botão "Sair").
+    try { App.minimizeApp(); } catch { /* ignore */ }
+  });
 }
 
 // Last known result of the native FCM registration so the Settings screen can

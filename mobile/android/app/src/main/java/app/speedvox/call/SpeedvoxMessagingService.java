@@ -8,10 +8,13 @@ import com.google.firebase.messaging.RemoteMessage;
 
 import java.util.Map;
 
-// Recebe o push de chamada (FCM) e faz a chamada tocar mesmo com o app fechado.
-// Primeiro tenta o caminho de PARIDADE (Telecom self-managed — toca pelo sistema
-// como uma ligação de verdade); se o Telecom recusar/indisponível, cai para a
-// notificação de tela cheia. A entrega usa data-message de alta prioridade.
+// Recebe o push de chamada (FCM) e faz a chamada tocar E abrir em TELA CHEIA
+// mesmo com o app fechado. A entrega usa data-message de alta prioridade.
+//
+// IMPORTANTE: sempre usamos a notificação com full-screen intent (caminho
+// confiável que abre o app por cima de tudo). A tentativa via Telecom
+// self-managed foi REMOVIDA daqui porque, em vários aparelhos, ela "aceitava" a
+// chamada mas não exibia UI — a chamada sumia (virava "cancelada").
 public class SpeedvoxMessagingService extends FirebaseMessagingService {
     public static final String PREFS = "speedvox_fcm";
     public static final String KEY_TOKEN = "fcm_token";
@@ -35,12 +38,9 @@ public class SpeedvoxMessagingService extends FirebaseMessagingService {
         String callId = data.get("callId");
         String media = data.get("media");
 
-        // Caminho preferido: telecom do sistema (tela de bloqueio, DnD, Bluetooth,
-        // UI nativa de ligação). Ao aceitar, o próprio sistema chama a UI via
-        // onShowIncomingCallUi(). Se recusar, mostramos a notificação direto.
-        boolean viaTelecom = CallTelecom.placeIncoming(getApplicationContext(), caller, callId, media);
-        if (!viaTelecom) {
-            CallTelecom.showIncomingUi(getApplicationContext(), caller, callId, media);
-        }
+        // Sempre mostra a tela cheia (notificação com full-screen intent que abre
+        // a IncomingCallActivity por cima da tela de bloqueio). Este é o caminho
+        // que abre o app na tela do usuário de forma confiável.
+        CallTelecom.showIncomingUi(getApplicationContext(), caller, callId, media);
     }
 }
