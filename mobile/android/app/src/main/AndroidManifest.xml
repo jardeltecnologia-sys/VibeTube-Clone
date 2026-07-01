@@ -96,6 +96,8 @@
          a chamada — o WhatsApp também é isento). -->
     <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- Abrir a tela de chamada por cima de tudo (mesmo com a tela ligada). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!-- VibeTube Mesh (Nearby Connections): Bluetooth + BLE -->
     <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />

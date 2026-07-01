@@ -38,9 +38,12 @@ public class SpeedvoxMessagingService extends FirebaseMessagingService {
         String callId = data.get("callId");
         String media = data.get("media");
 
-        // Sempre mostra a tela cheia (notificação com full-screen intent que abre
-        // a IncomingCallActivity por cima da tela de bloqueio). Este é o caminho
-        // que abre o app na tela do usuário de forma confiável.
+        // 1) Notificação com full-screen intent (abre a tela cheia quando o
+        //    aparelho está bloqueado; e mostra os botões Atender/Recusar).
         CallTelecom.showIncomingUi(getApplicationContext(), caller, callId, media);
+        // 2) Abre a IncomingCallActivity DIRETO (para o caso de tela ligada, em
+        //    que o Android não dispara o full-screen intent sozinho). Precisa da
+        //    permissão "Aparecer sobre outros apps".
+        CallTelecom.launchIncomingActivity(getApplicationContext(), caller, callId, media);
     }
 }

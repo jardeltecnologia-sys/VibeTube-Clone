@@ -3865,7 +3865,7 @@ function settingsModal() {
     };
     readinessBox.append(
       line(r.notifications, 'Notificações permitidas', null, null),
-      line(r.telecom, 'Tocar pelo sistema (estilo WhatsApp)', null, null),
+      line(r.overlay, 'Abrir a tela de chamada por cima (aparecer sobre apps)', 'Liberar', () => plugin.requestOverlayPermission && plugin.requestOverlayPermission()),
       line(r.fullScreen, 'Abrir em tela cheia (Android 14+)', 'Liberar', () => plugin.openFullScreenIntentSettings()),
       line(r.battery, 'Não congelar no modo economia de bateria', 'Liberar', () => plugin.requestBatteryOptimizationExemption()),
     );
