@@ -78,6 +78,21 @@ function icon(name, { size = 20, fill = false } = {}) {
   return tpl.content.firstElementChild;
 }
 
+// Haptics — um "toque" tátil leve nos gestos principais (sensação premium, tipo
+// iOS). Usa o plugin nativo do Capacitor quando existe (mais crisp); senão cai
+// na Vibration API do WebView/navegador. Desligável em Ajustes.
+function haptic(kind = 'light') {
+  if (localStorage.getItem('speedvox_haptics') === '0') return;
+  try {
+    const H = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
+    if (H && H.impact) {
+      H.impact({ style: kind === 'medium' ? 'MEDIUM' : kind === 'heavy' ? 'HEAVY' : 'LIGHT' });
+      return;
+    }
+    if (navigator.vibrate) navigator.vibrate(kind === 'medium' ? 16 : kind === 'heavy' ? 26 : 9);
+  } catch { /* ignore */ }
+}
+
 const SERVER_REACHABLE_TTL_MS = 30000;
 const HEALTH_TIMEOUT_MS = 3500;
 let healthProbe = null;
@@ -1662,12 +1677,13 @@ function clearReply() {
   state.editing = null;
   $('#reply-preview').classList.add('hidden');
 }
-function react(m, emoji) { state.socket.emit('message:react', { messageId: m.id, emoji }); }
+function react(m, emoji) { haptic('light'); state.socket.emit('message:react', { messageId: m.id, emoji }); }
 function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
 }
 
 async function toggleStar(m) {
+  haptic('light');
   try {
     const { starred } = await api.starMessage(m.id, !m.starred);
     m.starred = starred;
@@ -2069,6 +2085,7 @@ function flushOutbox() {
 
 // plainText: original plaintext to show optimistically when payload.body is ciphertext.
 function queueAndSend(payload, plainText) {
+  haptic('light');
   payload.clientId = newClientId();
   addToOutbox(payload);
   const opt = optimisticMessage(payload);
@@ -3575,6 +3592,9 @@ function settingsModal() {
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Vibrar ao receber chamada'),
       boolRow('speedvox_vibrate', 'Ativado', 'Desativado')),
+    el('div', { class: 'field-row' },
+      el('div', { class: 'field-label' }, '📳 Vibração nos toques (haptics)'),
+      boolRow('speedvox_haptics', 'Ativado', 'Desativado')),
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Som ao chegar mensagem (app aberto)'),
       boolRow('speedvox_msg_sound', 'Ativado', 'Desativado')),
