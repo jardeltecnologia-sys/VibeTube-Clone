@@ -1043,6 +1043,15 @@ input, textarea { font-family: inherit; font-size: 15px; }
 .popup-item { display: flex; align-items: center; gap: 10px; }
 .popup-item svg { flex: 0 0 auto; color: var(--text-dim); }
 
+/* Cartões de anexo: localização, contato, evento, Pix. */
+.attach-card { background: var(--panel-2); border: 1px solid var(--divider); border-radius: 12px; padding: 10px 12px; margin-bottom: 4px; max-width: 260px; }
+.attach-card-head { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+.attach-card-head svg { color: var(--accent); flex: 0 0 auto; }
+.attach-card-sub { font-size: 13px; color: var(--text-dim); margin-top: 2px; }
+.attach-card-btn { display: inline-block; margin-top: 8px; background: var(--accent-soft); color: var(--accent-dark);
+  font-weight: 600; font-size: 13px; padding: 7px 12px; border-radius: 8px; text-decoration: none; border: none; cursor: pointer; }
+.attach-card-btn:hover { filter: brightness(.97); }
+
 /* Acessibilidade: respeita quem pediu menos animação no sistema. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }

@@ -85,7 +85,21 @@ public class SpeedvoxCallPlugin extends Plugin {
         ret.put("battery", battery);
 
         ret.put("telecom", CallTelecom.isRegistered(ctx));
+        ret.put("overlay", CallTelecom.canLaunchOverlay(ctx));
         call.resolve(ret);
+    }
+
+    // Abre a tela do sistema para liberar "Aparecer sobre outros apps" (overlay).
+    @PluginMethod
+    public void requestOverlayPermission(PluginCall call) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+                i.setData(Uri.parse("package:" + getContext().getPackageName()));
+                startFrom(i);
+            }
+            call.resolve();
+        } catch (Exception e) { call.reject(e.getMessage()); }
     }
 
     // Abre a tela do sistema para o usuário isentar o app da otimização de bateria.

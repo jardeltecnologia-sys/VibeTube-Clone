@@ -68,6 +68,83 @@ router.post('/batch', requireAuth, (req, res) => {
   });
 });
 
+// ── Upload em PEDAÇOS (arquivos grandes) ──────────────────────────────────────
+// Fura o limite de ~100 MB do Cloudflare: o cliente envia o arquivo em pedaços
+// de 20 MB e o servidor remonta. Bônus: o nginx só precisa aceitar o tamanho de
+// UM pedaço, não o arquivo inteiro. Os pedaços ficam no tmp do sistema (fora do
+// /uploads público) e são apagados após a montagem.
+const os = require('os');
+const CHUNK_TMP = path.join(os.tmpdir(), 'speedvox-chunks');
+try { if (!fs.existsSync(CHUNK_TMP)) fs.mkdirSync(CHUNK_TMP, { recursive: true }); } catch { /* ignore */ }
+const safeId = (s) => String(s || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+
+const chunkUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const uid = safeId(req.body.uploadId);
+      if (!uid) return cb(new Error('uploadId inválido'));
+      const dir = path.join(CHUNK_TMP, uid);
+      try { fs.mkdirSync(dir, { recursive: true }); } catch { /* ignore */ }
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const idx = parseInt(req.body.index, 10);
+      if (!Number.isInteger(idx) || idx < 0 || idx > 200000) return cb(new Error('index inválido'));
+      cb(null, String(idx));
+    },
+  }),
+  limits: { fileSize: 64 * 1024 * 1024 }, // até 64 MB por pedaço
+});
+
+router.post('/chunk', requireAuth, (req, res) => {
+  chunkUpload.single('chunk')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: 'Falha ao enviar o pedaço' });
+    if (!req.file) return res.status(400).json({ error: 'pedaço ausente' });
+    res.json({ ok: true });
+  });
+});
+
+router.post('/chunk/finish', requireAuth, (req, res) => {
+  const uid = safeId(req.body.uploadId);
+  const total = parseInt(req.body.total, 10);
+  const name = String(req.body.name || 'arquivo');
+  const mime = String(req.body.mime || 'application/octet-stream');
+  if (!uid || !Number.isInteger(total) || total < 1 || total > 200000) {
+    return res.status(400).json({ error: 'parâmetros inválidos' });
+  }
+  const ext = (path.extname(name).slice(1) || '').toLowerCase();
+  if (BLOCKED_EXT.has(ext)) return res.status(415).json({ error: 'Tipo de arquivo não permitido por segurança' });
+
+  const dir = path.join(CHUNK_TMP, uid);
+  for (let i = 0; i < total; i++) {
+    if (!fs.existsSync(path.join(dir, String(i)))) {
+      return res.status(400).json({ error: `pedaço ${i} ausente; reenvie` });
+    }
+  }
+  try {
+    const cleanExt = path.extname(name).slice(0, 12).replace(/[^.\w]/g, '');
+    const finalName = `${id()}${cleanExt}`;
+    const finalPath = path.join(config.uploadDir, finalName);
+    fs.writeFileSync(finalPath, Buffer.alloc(0));
+    let size = 0;
+    for (let i = 0; i < total; i++) {
+      const buf = fs.readFileSync(path.join(dir, String(i)));
+      fs.appendFileSync(finalPath, buf);
+      size += buf.length;
+      if (size > config.uploadMaxBytes) {
+        try { fs.rmSync(finalPath, { force: true }); } catch { /* ignore */ }
+        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+        const gb = (config.uploadMaxBytes / (1024 ** 3)).toFixed(1);
+        return res.status(413).json({ error: `Arquivo muito grande (máx. ${gb} GB)` });
+      }
+    }
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    res.json({ url: `/uploads/${finalName}`, name, mime, size });
+  } catch (e) {
+    res.status(500).json({ error: 'Falha ao montar o arquivo' });
+  }
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 function fileToJson(f) {

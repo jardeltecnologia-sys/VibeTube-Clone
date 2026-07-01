@@ -115,6 +115,52 @@ export const api = {
     return request('POST', '/upload', fd, true);
   },
 
+  // Upload de arquivos GRANDES em pedaços de 20 MB (fura o limite ~100 MB do
+  // Cloudflare; o servidor remonta). onProgress(pct 0-100) sobre o total.
+  async uploadChunked(file, onProgress) {
+    const CHUNK = 20 * 1024 * 1024;
+    const total = Math.max(1, Math.ceil(file.size / CHUNK));
+    const uploadId = ((crypto.randomUUID && crypto.randomUUID()) || `u${Date.now()}${Math.random()}`)
+      .replace(/[^a-zA-Z0-9_-]/g, '');
+    for (let i = 0; i < total; i++) {
+      const blob = file.slice(i * CHUNK, Math.min((i + 1) * CHUNK, file.size));
+      await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', apiUrl('/api/upload/chunk'));
+        const token = getToken();
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable && onProgress) {
+            onProgress(Math.min(99, Math.round(((i + e.loaded / e.total) / total) * 100)));
+          }
+        };
+        xhr.onload = () => {
+          if (xhr.status === 0) return reject(networkError());
+          if (xhr.status >= 400) {
+            const d = parseXhrJson(xhr);
+            const err = new Error((d && d.error) || `HTTP ${xhr.status}`);
+            err.status = xhr.status;
+            return reject(err);
+          }
+          resolve();
+        };
+        xhr.onerror = () => reject(networkError());
+        xhr.ontimeout = () => reject(networkError('Tempo esgotado no upload'));
+        const fd = new FormData();
+        fd.append('uploadId', uploadId);
+        fd.append('index', String(i));
+        fd.append('total', String(total));
+        fd.append('chunk', blob, String(i));
+        xhr.send(fd);
+      });
+    }
+    const res = await request('POST', '/upload/chunk/finish', {
+      uploadId, total, name: file.name || 'arquivo', mime: file.type || 'application/octet-stream',
+    });
+    if (onProgress) onProgress(100);
+    return res;
+  },
+
   // Upload a single file with XHR progress events.
   // onProgress(pct: 0-100) — called as data arrives.
   uploadWithProgress(file, onProgress) {

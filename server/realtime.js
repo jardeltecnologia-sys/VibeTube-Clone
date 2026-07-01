@@ -714,6 +714,18 @@ async function setup(httpServer) {
       io.to(`user:${to}`).emit('call:rejected', { from: userId, callId });
       logCallEverywhere(callId, 'rejected');
     });
+
+    // E2EE de GRUPOS (Sender Keys): o servidor só REPASSA. A distribuição da
+    // sender key de um membro (`dist`) já vem cifrada par-a-par — conteúdo opaco
+    // aqui. `request` pede o reenvio quando alguém ainda não tem a chave.
+    socket.on('group:senderkey', ({ to, groupId, dist }) => {
+      if (!to || !groupId || !dist) return;
+      io.to(`user:${to}`).emit('group:senderkey', { from: userId, groupId, dist });
+    });
+    socket.on('group:senderkey:request', ({ to, groupId }) => {
+      if (!to || !groupId) return;
+      io.to(`user:${to}`).emit('group:senderkey:request', { from: userId, groupId });
+    });
     socket.on('call:sdp', ({ to, callId, sdp }) => {
       io.to(`user:${to}`).emit('call:sdp', { from: userId, callId, sdp });
     });

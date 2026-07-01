@@ -89,6 +89,35 @@ public final class CallTelecom {
         }
     }
 
+    // Abre a tela cheia DIRETO (não depende do full-screen intent, que só dispara
+    // sozinho com a tela bloqueada / permissão especial). Em Android 10+ iniciar
+    // uma Activity a partir do background exige "Aparecer sobre outros apps"
+    // (SYSTEM_ALERT_WINDOW). Com essa permissão, a tela abre também com a tela
+    // ligada — que é o caso que estava só tocando sem abrir.
+    public static boolean launchIncomingActivity(Context ctx, String caller, String callId, String media) {
+        try {
+            Context app = ctx.getApplicationContext();
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
+                    && !android.provider.Settings.canDrawOverlays(app)) {
+                return false; // sem overlay o Android bloqueia abrir do background
+            }
+            Intent i = new Intent(app, IncomingCallActivity.class);
+            i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            i.putExtra("caller", caller);
+            i.putExtra("callId", callId);
+            i.putExtra("media", media);
+            app.startActivity(i);
+            return true;
+        } catch (Exception ignored) { return false; }
+    }
+
+    public static boolean canLaunchOverlay(Context ctx) {
+        try {
+            return Build.VERSION.SDK_INT < Build.VERSION_CODES.Q
+                || android.provider.Settings.canDrawOverlays(ctx.getApplicationContext());
+        } catch (Exception e) { return false; }
+    }
+
     // Mostra a UI de chamada recebida: notificação de alta prioridade com
     // full-screen intent para a IncomingCallActivity. Em Android 12+ usa
     // Notification.CallStyle (visual/ranking de ligação de verdade).

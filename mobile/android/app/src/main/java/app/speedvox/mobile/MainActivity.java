@@ -69,6 +69,24 @@ public class MainActivity extends BridgeActivity {
                 } catch (Exception ignored) {}
             }
         }
+
+        // "Aparecer sobre outros apps" (overlay): permite ABRIR a tela de chamada
+        // por cima de tudo mesmo com a tela LIGADA (Android 10+). Sem isso, muitas
+        // vezes a chamada só toca sem abrir a tela. Pergunta 1x.
+        requestOverlayOnce();
+    }
+
+    private void requestOverlayOnce() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            if (Settings.canDrawOverlays(this)) return;
+            android.content.SharedPreferences sp = getSharedPreferences("speedvox_setup", MODE_PRIVATE);
+            if (sp.getBoolean("overlay_asked", false)) return;
+            sp.edit().putBoolean("overlay_asked", true).apply();
+            Intent i = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION);
+            i.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(i);
+        } catch (Exception ignored) {}
     }
 
     // Pede isenção de otimização de bateria uma única vez por instalação (para
