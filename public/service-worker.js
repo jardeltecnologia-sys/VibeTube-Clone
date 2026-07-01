@@ -2,7 +2,7 @@
 // Network calls (/api, /socket.io, /uploads) always bypass the service worker.
 // The static shell is cached and updated with a Network-First strategy to avoid stale code.
 
-const CACHE = 'speedvox-shell-v37';
+const CACHE = 'speedvox-shell-v38';
 const SHELL = [
   '/',
   '/index.html',
@@ -14,6 +14,7 @@ const SHELL = [
   '/js/groupcall.js',
   '/js/e2ee.js',
   '/js/ratchet.js',
+  '/js/groupcrypto.js',
   '/js/qrcode.js',
   '/manifest.webmanifest',
   '/icons/icon.svg',

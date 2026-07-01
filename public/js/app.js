@@ -8,6 +8,7 @@ import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
 import * as ratchet from './ratchet.js';
+import * as groupcrypto from './groupcrypto.js';
 import { qrSVG } from './qrcode.js';
 import { AUDIO_CONSTRAINTS } from './webrtc-quality.js';
 import * as applock from './applock.js';
@@ -549,6 +550,23 @@ async function connectSocket() {
     else hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
   });
 
+  // E2EE de grupos (Sender Keys): recebo a sender key de um membro (cifrada
+  // par-a-par) e guardo; ou me pedem a minha e eu reenvio.
+  socket.on('group:senderkey', async ({ from, groupId, dist }) => {
+    try {
+      const pub = await getUserPublicKey(from);
+      const key = pub ? await e2ee.deriveChatKey(pub) : null;
+      if (!key) return;
+      const distMsg = JSON.parse(await e2ee.decrypt(key, dist));
+      saveJSON(grkKey(groupId, from), groupcrypto.receiverFromDistribution(distMsg));
+      retryGroupDecrypt(groupId, from);
+    } catch (err) { console.warn('group:senderkey recv falhou', err); }
+  });
+  socket.on('group:senderkey:request', ({ from, groupId }) => {
+    const chat = state.chats.get(groupId);
+    if (chat && chat.type === 'group') distributeSenderKeyTo(chat, from).catch(() => {});
+  });
+
   socket.on('message:new', ({ message, clientId }) => {
     addMessage(message, clientId);
     if (message.chatId === state.activeChatId && message.senderId !== state.me.id) {
@@ -951,6 +969,95 @@ function ratchetDecryptFor(chat, env) {
   });
 }
 
+// ============ Lote 3: E2EE de grupos (Sender Keys) ============
+// Estado local: minha sender key por grupo; para quem já distribuí; e o estado
+// de destinatário por (grupo, remetente). Nada disso sai em claro do aparelho.
+const gskKey = (gid) => `speedvox_gsk_${state.me.id}_${gid}`;
+const gskDistKey = (gid) => `speedvox_gskdist_${state.me.id}_${gid}`;
+const grkKey = (gid, sid) => `speedvox_grk_${state.me.id}_${gid}_${sid}`;
+const gLoad = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
+const gSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+const saveJSON = gSave;
+
+const _pubKeyCache = new Map();
+async function getUserPublicKey(userId) {
+  if (_pubKeyCache.has(userId)) return _pubKeyCache.get(userId);
+  let pub = null;
+  for (const chat of state.chats.values()) {
+    const mem = (chat.members || []).find((x) => x.id === userId);
+    if (mem && mem.publicKey) { pub = mem.publicKey; break; }
+  }
+  if (!pub) { try { const { user } = await api.getUser(userId); pub = user.publicKey || null; } catch {} }
+  if (pub) _pubKeyCache.set(userId, pub);
+  return pub;
+}
+
+async function getMySenderKey(groupId) {
+  let sk = gLoad(gskKey(groupId));
+  if (!sk) { sk = await groupcrypto.createSenderKey(); gSave(gskKey(groupId), sk); gSave(gskDistKey(groupId), []); }
+  return sk;
+}
+
+// Envia minha distribution message a UM membro, cifrada par-a-par (só ele lê).
+async function distributeSenderKeyTo(chat, memberId) {
+  if (!chat || memberId === state.me.id) return false;
+  const sk = await getMySenderKey(chat.id);
+  const pub = await getUserPublicKey(memberId);
+  if (!pub) return false;
+  const key = await e2ee.deriveChatKey(pub);
+  if (!key) return false;
+  const encDist = JSON.stringify(await e2ee.encrypt(key, JSON.stringify(groupcrypto.distributionMessage(sk))));
+  state.socket.emit('group:senderkey', { to: memberId, groupId: chat.id, dist: encDist });
+  return true;
+}
+
+// Garante que todos os membros atuais tenham a minha sender key.
+async function ensureSenderKeyDistributed(chat) {
+  await getMySenderKey(chat.id);
+  const done = new Set(gLoad(gskDistKey(chat.id)) || []);
+  for (const m of (chat.members || [])) {
+    if (m.id === state.me.id || done.has(m.id)) continue;
+    if (await distributeSenderKeyTo(chat, m.id)) done.add(m.id);
+  }
+  gSave(gskDistKey(chat.id), [...done]);
+}
+
+async function groupEncryptFor(chat, plaintext) {
+  if (!state.e2eeReady) return null;
+  await ensureSenderKeyDistributed(chat);
+  const sk = await getMySenderKey(chat.id);
+  const { env, sender } = await groupcrypto.senderEncrypt(sk, plaintext);
+  gSave(gskKey(chat.id), sender);
+  return JSON.stringify(env);
+}
+
+async function groupDecryptFor(groupId, senderId, env) {
+  const recv = gLoad(grkKey(groupId, senderId));
+  if (!recv) return null; // ainda não tenho a sender key desse remetente
+  const { plaintext, recv: newRecv } = await groupcrypto.receiverDecrypt(recv, env);
+  gSave(grkKey(groupId, senderId), newRecv);
+  return plaintext;
+}
+
+const _skReqAt = new Map();
+function requestSenderKey(groupId, senderId) {
+  if (!senderId || senderId === state.me.id) return;
+  const k = `${groupId}|${senderId}`;
+  const now = Date.now();
+  if (_skReqAt.get(k) && now - _skReqAt.get(k) < 8000) return; // debounce
+  _skReqAt.set(k, now);
+  try { state.socket.emit('group:senderkey:request', { to: senderId, groupId }); } catch {}
+}
+
+function retryGroupDecrypt(groupId, senderId) {
+  const list = state.messages.get(groupId) || [];
+  for (const m of list) {
+    if (m.senderId === senderId && m.encrypted && m._decryptFailed) {
+      m._decryptFailed = false; m._plain = null; decryptInto(m);
+    }
+  }
+}
+
 // Decrypt an incoming encrypted message in place, then refresh the views.
 async function decryptInto(m) {
   const chat = state.chats.get(m.chatId);
@@ -958,8 +1065,13 @@ async function decryptInto(m) {
   try { env = JSON.parse(m.body); } catch {}
   try {
     let pt = null;
-    if (env && env.v === 2) {
-      // Forward-secret (Double Ratchet) message.
+    if (env && env.gk === 1) {
+      // Mensagem de GRUPO (Sender Keys). Se ainda não tenho a chave do
+      // remetente, peço e mostro "decifrando" até ela chegar.
+      pt = await groupDecryptFor(m.chatId, m.senderId, env);
+      if (pt == null) requestSenderKey(m.chatId, m.senderId);
+    } else if (env && env.v === 2) {
+      // Forward-secret (Double Ratchet) message (chat direto).
       pt = await ratchetDecryptFor(chat, env);
     } else {
       // Legacy/static AES message (also used for edits/forwards).
@@ -2215,6 +2327,15 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
 // Ratchet, falls back to the static key, else plaintext. Returns the body to
 // send plus whether it's encrypted and the plaintext (for the local echo).
 async function encryptOutgoing(chat, body) {
+  // GRUPO: cifra com a minha sender key (E2EE de grupo). Best-effort — se algo
+  // falhar, envia em claro para o grupo não quebrar (v1). Fail-closed vem depois.
+  if (chat && chat.type === 'group') {
+    try {
+      const env = await groupEncryptFor(chat, body);
+      if (env) return { body: env, encrypted: true, plainText: body };
+    } catch (err) { console.warn('E2EE de grupo falhou; enviando em claro', err); }
+    return { body, encrypted: false, plainText: undefined };
+  }
   if (!chat || chat.type !== 'direct') {
     return { body, encrypted: false, plainText: undefined };
   }
