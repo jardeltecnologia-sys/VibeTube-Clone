@@ -71,6 +71,13 @@ jobs:
         working-directory: mobile/android
         run: |
           chmod +x gradlew
+          # Assinatura FIXA: copia o keystore commitado para o local padrão do
+          # AGP também (à prova de falhas). Sem uma chave estável, cada build era
+          # assinado diferente e o Android recusava atualizar ("conflito").
+          mkdir -p "$HOME/.android"
+          cp app/debug.keystore "$HOME/.android/debug.keystore"
+          echo "Keystore SHA-256 usado neste build:"
+          keytool -list -v -keystore app/debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | grep -i "SHA256:" | head -1 || true
           # versionCode crescente (número do build) para o Android reconhecer
           # como atualização; assinatura fixa vem do debug.keystore commitado.
           ./gradlew assembleDebug --no-daemon -Pvcode=${{ github.run_number }} -Pvname=1.0.${{ github.run_number }}

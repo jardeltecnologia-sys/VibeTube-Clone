@@ -1,0 +1,15 @@
+# Arquivos binários — o git NUNCA deve aplicar conversão de fim de linha (CRLF),
+# senão corrompe o binário. Isso vinha corrompendo o keystore de assinatura do
+# APK no CI, gerando assinatura diferente a cada build (Android recusava
+# atualizar por cima, dando "conflito").
+*.keystore binary
+*.jks binary
+*.apk binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
