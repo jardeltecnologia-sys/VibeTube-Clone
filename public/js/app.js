@@ -8,7 +8,6 @@ import { CallManager } from './calls.js';
 import { GroupCallManager } from './groupcall.js';
 import * as e2ee from './e2ee.js';
 import * as ratchet from './ratchet.js';
-import * as groupcrypto from './groupcrypto.js';
 import { qrSVG } from './qrcode.js';
 import { AUDIO_CONSTRAINTS } from './webrtc-quality.js';
 import * as applock from './applock.js';
@@ -26,16 +25,12 @@ const state = {
   typing: new Map(),      // chatId -> Map(userId -> displayName)
   replyTo: null,
   editing: null,
-  serverReachable: false,
-  lastHealthOkAt: 0,
+  online: navigator.onLine,
   e2eeReady: false,
   keyCache: new Map(),    // chatId -> AES CryptoKey (or null if peer has no key)
   iceServers: null,
   composerMentions: new Map(), // displayName -> userId, for the current draft
-  pendingAnswerCallId: null,
-  ghostModeActive: false,
 };
-window.state = state;
 
 // ------------------------------------------------------------------ helpers
 const $ = (sel) => document.querySelector(sel);
@@ -56,119 +51,6 @@ function el(tag, props = {}, ...children) {
   }
   return node;
 }
-
-// Ícones Lucide (SVG de traço, currentColor) — substituem emojis por um visual
-// profissional e consistente. Uso: icon('trash'), icon('star', { fill: true }).
-const ICON_PATHS = {
-  reply: '<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
-  forward: '<polyline points="15 14 20 9 15 4"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/>',
-  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/>',
-  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
-  pin: '<path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V17h14v-1.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V5a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>',
-  task: '<rect x="8" y="2" width="8" height="4" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6"/><path d="M9 16h6"/>',
-  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
-  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>',
-  'more-vertical': '<circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/>',
-  phone: '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>',
-  video: '<polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/>',
-  download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
-  paperclip: '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>',
-  chart: '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
-  clock: '<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
-  calendar: '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
-  ghost: '<path d="M9 10h.01"/><path d="M15 10h.01"/><path d="M12 2a8 8 0 0 0-8 8v12l3-3 2.5 2.5L12 19l2.5 2.5L17 19l3 3V10a8 8 0 0 0-8-8z"/>',
-  archive: '<rect x="2" y="3" width="20" height="5" rx="1"/><path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8"/><path d="M10 12h4"/>',
-  bell: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>',
-  'bell-off': '<path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/><path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><line x1="1" y1="1" x2="23" y2="23"/>',
-  'map-pin': '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/>',
-  user: '<path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/>',
-  key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="M11.5 11.5 21 2m-4 4 2.5 2.5M14 9l2.5 2.5"/>',
-};
-function icon(name, { size = 20, fill = false } = {}) {
-  const tpl = document.createElement('template');
-  tpl.innerHTML = `<svg viewBox="0 0 24 24" width="${size}" height="${size}" fill="${fill ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICON_PATHS[name] || ''}</svg>`;
-  return tpl.content.firstElementChild;
-}
-
-// Haptics — um "toque" tátil leve nos gestos principais (sensação premium, tipo
-// iOS). Usa o plugin nativo do Capacitor quando existe (mais crisp); senão cai
-// na Vibration API do WebView/navegador. Desligável em Ajustes.
-function haptic(kind = 'light') {
-  if (localStorage.getItem('speedvox_haptics') === '0') return;
-  try {
-    const H = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Haptics;
-    if (H && H.impact) {
-      H.impact({ style: kind === 'medium' ? 'MEDIUM' : kind === 'heavy' ? 'HEAVY' : 'LIGHT' });
-      return;
-    }
-    if (navigator.vibrate) navigator.vibrate(kind === 'medium' ? 16 : kind === 'heavy' ? 26 : 9);
-  } catch { /* ignore */ }
-}
-
-const SERVER_REACHABLE_TTL_MS = 30000;
-const HEALTH_TIMEOUT_MS = 3500;
-let healthProbe = null;
-
-function socketIsConnected() {
-  return Boolean(state.socket && state.socket.connected);
-}
-
-function setServerReachable(ok) {
-  state.serverReachable = Boolean(ok);
-  if (ok) state.lastHealthOkAt = Date.now();
-}
-
-function cachedServerReachable() {
-  return socketIsConnected()
-    || (state.serverReachable && Date.now() - state.lastHealthOkAt < SERVER_REACHABLE_TTL_MS);
-}
-
-async function fetchServerHealth({ timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
-  try {
-    const res = await fetch(apiUrl('/api/health'), {
-      cache: 'no-store',
-      signal: ctrl.signal,
-    });
-    if (!res.ok) {
-      const err = new Error(`HTTP ${res.status}`);
-      err.status = res.status;
-      throw err;
-    }
-    return await res.json().catch(() => ({ ok: true }));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-async function isServerReachable({ force = false, timeoutMs = HEALTH_TIMEOUT_MS } = {}) {
-  if (socketIsConnected()) {
-    setServerReachable(true);
-    return true;
-  }
-  if (!force && cachedServerReachable()) return true;
-  if (!force && healthProbe) return healthProbe;
-
-  healthProbe = (async () => {
-    try {
-      const h = await fetchServerHealth({ timeoutMs });
-      const ok = Boolean(h && h.ok);
-      setServerReachable(ok);
-      return ok;
-    } catch {
-      setServerReachable(false);
-      return false;
-    } finally {
-      healthProbe = null;
-      updateNetIndicator();
-    }
-  })();
-
-  return healthProbe;
-}
-
-const hasInternetConnection = isServerReachable;
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, (c) =>
@@ -216,137 +98,6 @@ function fmtDuration(s) {
   const ss = String(s % 60).padStart(2, '0');
   return `${mm}:${ss}`;
 }
-
-// Format a byte count as a human-readable string (KB, MB, GB).
-function formatBytes(bytes) {
-  if (!bytes) return '';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
-  return `${(bytes / 1073741824).toFixed(2)} GB`;
-}
-
-// ── Premium in-app audio player ──────────────────────────────────────────────
-// Replaces the default <audio controls> with a styled seekable player.
-// Works with ALL audio formats the browser supports (mp3, aac, flac, wav, ogg,
-// opus, m4a, webm, etc.) — the <audio> element handles codec negotiation.
-function buildAudioPlayer(src, name) {
-  const audio = el('audio', { src, preload: 'metadata' });
-  const playBtn = el('button', { class: 'ap-play', title: 'Play / Pause' }, '▶');
-  const timeEl  = el('span', { class: 'ap-time' }, '0:00');
-  const durEl   = el('span', { class: 'ap-dur' }, '0:00');
-  const track   = el('div', { class: 'ap-track' });
-  const fill    = el('div', { class: 'ap-fill' });
-  const knob    = el('div', { class: 'ap-knob' });
-  const nameEl  = name ? el('div', { class: 'ap-name', title: name },
-    name.length > 28 ? name.slice(0, 25) + '…' : name) : null;
-  const speedBtn = el('button', { class: 'ap-speed' }, '1×');
-  const speeds = [1, 1.25, 1.5, 2, 0.75];
-  let speedIdx = 0;
-  speedBtn.onclick = () => {
-    speedIdx = (speedIdx + 1) % speeds.length;
-    audio.playbackRate = speeds[speedIdx];
-    speedBtn.textContent = `${speeds[speedIdx]}×`;
-  };
-
-  track.append(fill, knob);
-
-  audio.addEventListener('loadedmetadata', () => {
-    durEl.textContent = fmtDuration(Math.round(audio.duration));
-  });
-  audio.addEventListener('timeupdate', () => {
-    const pct = audio.duration ? (audio.currentTime / audio.duration) * 100 : 0;
-    fill.style.width = `${pct}%`;
-    knob.style.left   = `calc(${pct}% - 6px)`;
-    timeEl.textContent = fmtDuration(Math.round(audio.currentTime));
-  });
-  audio.addEventListener('ended', () => { playBtn.textContent = '▶'; playBtn.classList.remove('playing'); });
-
-  playBtn.onclick = () => {
-    if (audio.paused) {
-      // Pause all other active players first.
-      document.querySelectorAll('.ap-audio-el').forEach(a => { if (a !== audio) { a.pause(); const b = a.closest('.msg-audio-player')?.querySelector('.ap-play'); if (b) { b.textContent = '▶'; b.classList.remove('playing'); } } });
-      audio.play().catch(() => {});
-      playBtn.textContent = '⏸';
-      playBtn.classList.add('playing');
-    } else {
-      audio.pause();
-      playBtn.textContent = '▶';
-      playBtn.classList.remove('playing');
-    }
-  };
-
-  // Seek by clicking/dragging the track.
-  function seekTo(e) {
-    const rect = track.getBoundingClientRect();
-    const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-    if (audio.duration) audio.currentTime = pct * audio.duration;
-  }
-  let dragging = false;
-  track.addEventListener('mousedown', (e) => { dragging = true; seekTo(e); });
-  track.addEventListener('touchstart', (e) => { dragging = true; seekTo(e.touches[0]); }, { passive: true });
-  document.addEventListener('mousemove', (e) => { if (dragging) seekTo(e); });
-  document.addEventListener('touchmove', (e) => { if (dragging) seekTo(e.touches[0]); }, { passive: true });
-  document.addEventListener('mouseup', () => { dragging = false; });
-  document.addEventListener('touchend', () => { dragging = false; });
-
-  audio.className = 'ap-audio-el';
-
-  const wrap = el('div', { class: 'msg-audio msg-audio-player' });
-  const row1 = el('div', { class: 'ap-row' }, playBtn, timeEl, track, durEl, speedBtn);
-  if (nameEl) wrap.append(nameEl);
-  wrap.append(audio, row1);
-  return wrap;
-}
-
-// ── Image lightbox ────────────────────────────────────────────────────────────
-// Opens a fullscreen overlay with keyboard (←→ Esc) and touch-swipe support.
-// Pass a single URL or an array of URLs + starting index for gallery mode.
-function openLightbox(urlOrUrls, altText) {
-  const urls = Array.isArray(urlOrUrls) ? urlOrUrls : [urlOrUrls];
-  let idx = 0;
-  const overlay = el('div', { class: 'lightbox-overlay', id: 'lightbox-overlay' });
-  const img     = el('img', { class: 'lightbox-img', src: urls[0], alt: altText || '' });
-  const closeBtn = el('button', { class: 'lightbox-close', title: 'Fechar (Esc)' }, '✕');
-  const prevBtn  = el('button', { class: 'lightbox-nav lightbox-prev', title: 'Anterior' }, '‹');
-  const nextBtn  = el('button', { class: 'lightbox-nav lightbox-next', title: 'Próxima' }, '›');
-  const counter  = el('span', { class: 'lightbox-counter' });
-
-  function go(i) {
-    idx = (i + urls.length) % urls.length;
-    img.src = urls[idx];
-    counter.textContent = urls.length > 1 ? `${idx + 1} / ${urls.length}` : '';
-    prevBtn.style.display = urls.length > 1 ? '' : 'none';
-    nextBtn.style.display = urls.length > 1 ? '' : 'none';
-  }
-  go(0);
-
-  closeBtn.onclick = () => { overlay.classList.remove('open'); setTimeout(() => overlay.remove(), 250); document.removeEventListener('keydown', onKey); };
-  prevBtn.onclick  = () => go(idx - 1);
-  nextBtn.onclick  = () => go(idx + 1);
-  overlay.onclick  = (e) => { if (e.target === overlay) closeBtn.onclick(); };
-
-  function onKey(e) {
-    if (e.key === 'Escape') closeBtn.onclick();
-    if (e.key === 'ArrowLeft') go(idx - 1);
-    if (e.key === 'ArrowRight') go(idx + 1);
-  }
-  document.addEventListener('keydown', onKey);
-
-  // Touch swipe.
-  let touchX = null;
-  overlay.addEventListener('touchstart', (e) => { touchX = e.touches[0].clientX; }, { passive: true });
-  overlay.addEventListener('touchend',   (e) => {
-    if (touchX === null) return;
-    const dx = e.changedTouches[0].clientX - touchX;
-    if (Math.abs(dx) > 50) go(idx + (dx < 0 ? 1 : -1));
-    touchX = null;
-  });
-
-  overlay.append(img, closeBtn, prevBtn, nextBtn, counter);
-  document.body.append(overlay);
-  requestAnimationFrame(() => overlay.classList.add('open'));
-}
 function callLabel(m) {
   const c = parseCall(m);
   const icon = c.media === 'video' ? '📹' : '📞';
@@ -365,10 +116,6 @@ function lastMessagePreview(m) {
   if (m.type === 'audio') return '🎤 Mensagem de voz';
   if (m.type === 'file') return `📎 ${m.mediaName || 'Arquivo'}`;
   if (m.type === 'poll') return `📊 ${(m.poll && m.poll.question) || 'Enquete'}`;
-  if (m.type === 'location') return '📍 Localização';
-  if (m.type === 'contact') return '👤 Contato';
-  if (m.type === 'event') return '📅 Evento';
-  if (m.type === 'pix') return '💠 Pix';
   if (m.type === 'call') return callLabel(m);
   if (m.type === 'system') return m.body || '';
   if (m.encrypted) {
@@ -515,63 +262,22 @@ async function linkNewDeviceFlow() {
 }
 
 // ------------------------------------------------------------------ socket
-async function connectSocket() {
-  if (typeof io === 'undefined') {
-    try {
-      await new Promise((resolve, reject) => {
-        const script = document.createElement('script');
-        script.src = apiUrl('/socket.io/socket.io.js');
-        script.onload = resolve;
-        script.onerror = reject;
-        document.head.appendChild(script);
-      });
-    } catch (err) {
-      console.error('Failed to load Socket.IO client library, retrying in 5s...', err);
-      setTimeout(connectSocket, 5000);
-      return;
-    }
-  }
-
+function connectSocket() {
   // Same-origin for the web/PWA; absolute server URL for the bundled native app.
-  // We omit forcing transports to allow auto-negotiation (polling -> websocket upgrade),
-  // which prevents connection failures when websockets are blocked by Cloudflare or carriers.
-  const socket = io(API_BASE || undefined, { auth: { token: getToken() } });
+  const socket = API_BASE
+    ? io(API_BASE, { auth: { token: getToken() }, transports: ['websocket', 'polling'] })
+    : io({ auth: { token: getToken() } });
   state.socket = socket;
 
   socket.on('connect', () => {
-    console.log('SOCKET_CONNECTED');
-    setServerReachable(true);
     updateNetIndicator();
     flushOutbox();
-    loadChats().then(() => syncActiveMessagesSoon()).catch(() => {});
     // Internet is back: keep the mesh device registry fresh (best-effort).
     offline.registerDevice().catch(() => {});
   });
-  socket.on('disconnect', () => {
-    console.log('SOCKET_DISCONNECTED');
-    updateNetIndicator();
-    hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
-  });
+  socket.on('disconnect', () => updateNetIndicator());
   socket.on('connect_error', (e) => {
     if (e.message === 'unauthorized') logout();
-    else hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
-  });
-
-  // E2EE de grupos (Sender Keys): recebo a sender key de um membro (cifrada
-  // par-a-par) e guardo; ou me pedem a minha e eu reenvio.
-  socket.on('group:senderkey', async ({ from, groupId, dist }) => {
-    try {
-      const pub = await getUserPublicKey(from);
-      const key = pub ? await e2ee.deriveChatKey(pub) : null;
-      if (!key) return;
-      const distMsg = JSON.parse(await e2ee.decrypt(key, dist));
-      saveJSON(grkKey(groupId, from), groupcrypto.receiverFromDistribution(distMsg));
-      retryGroupDecrypt(groupId, from);
-    } catch (err) { console.warn('group:senderkey recv falhou', err); }
-  });
-  socket.on('group:senderkey:request', ({ from, groupId }) => {
-    const chat = state.chats.get(groupId);
-    if (chat && chat.type === 'group') distributeSenderKeyTo(chat, from).catch(() => {});
   });
 
   socket.on('message:new', ({ message, clientId }) => {
@@ -594,12 +300,7 @@ async function connectSocket() {
     if (!summary) return;
     state.chats.set(summary.id, summary);
     renderChatList();
-    if (summary.id === state.activeChatId) {
-      renderChatHeader(summary);
-      const list = state.messages.get(summary.id) || [];
-      const last = summary.lastMessage;
-      if (last && !list.some((m) => m.id === last.id)) syncActiveMessagesSoon();
-    }
+    if (summary.id === state.activeChatId) renderChatHeader(summary);
   });
 
   socket.on('chat:removed', ({ chatId }) => {
@@ -675,28 +376,6 @@ async function connectSocket() {
     renderChatList();
   });
 
-  socket.on('message:ghost-burn', ({ messageId, chatId }) => {
-    const list = state.messages.get(chatId);
-    if (list) {
-      const idx = list.findIndex((x) => x.id === messageId);
-      if (idx !== -1) list.splice(idx, 1);
-    }
-    if (chatId === state.activeChatId) {
-      const bubble = document.querySelector(`[data-mid="${messageId}"]`);
-      if (bubble) {
-        bubble.style.transition = 'opacity 0.8s ease-out, transform 0.8s ease-out';
-        bubble.style.opacity = '0';
-        bubble.style.transform = 'scale(0.8) translateY(-10px)';
-        setTimeout(() => {
-          renderMessages(true);
-        }, 800);
-      } else {
-        renderMessages(true);
-      }
-    }
-    renderChatList();
-  });
-
   socket.on('message:edited', ({ messageId, chatId, body, encrypted, editedAt }) => {
     const list = state.messages.get(chatId);
     const m = list && list.find((x) => x.id === messageId);
@@ -708,28 +387,6 @@ async function connectSocket() {
     }
     if (chatId === state.activeChatId) renderMessages(true);
     renderChatList();
-  });
-
-  socket.on('task:new', ({ chatId, task }) => {
-    if (state.activeChatId === chatId) {
-      toast(`📋 Nova tarefa: "${task.title}"`);
-    }
-  });
-
-  socket.on('task:updated', ({ chatId, task }) => {
-    if (state.activeChatId === chatId) {
-      const status = task.completed ? 'concluída ✅' : 'reaberta';
-      toast(`📋 Tarefa "${task.title}" foi ${status}`);
-    }
-  });
-
-  socket.on('audio:transcribed', ({ messageId, chatId, transcription }) => {
-    const list = state.messages.get(chatId);
-    const m = list && list.find((x) => x.id === messageId);
-    if (m) {
-      m.transcription = transcription;
-    }
-    if (chatId === state.activeChatId) renderMessages(true);
   });
 
   socket.on('status:update', () => { refreshStatusIndicator(); });
@@ -896,11 +553,7 @@ async function ensureChatKey(chat) {
   if (state.keyCache.has(chat.id)) return state.keyCache.get(chat.id);
   let pub = chat.otherUser.publicKey;
   if (!pub) {
-    try {
-      const { user } = await api.getUser(chat.otherUser.id);
-      pub = user.publicKey;
-      chat.otherUser.publicKey = pub || null;
-    } catch {}
+    try { const { user } = await api.getUser(chat.otherUser.id); pub = user.publicKey; } catch {}
   }
   const key = pub ? await e2ee.deriveChatKey(pub) : null;
   state.keyCache.set(chat.id, key);
@@ -942,18 +595,6 @@ async function saveRatchet(chatId, st) {
   localStorage.setItem(ratchetKey(chatId), await ratchet.serialize(st));
 }
 
-async function resetChatCryptoSession(chat) {
-  if (!chat || !chat.id) return;
-  try { localStorage.removeItem(ratchetKey(chat.id)); } catch {}
-  try { state.keyCache.delete(chat.id); } catch {}
-  if (chat.otherUser && chat.otherUser.id) {
-    try {
-      const { user } = await api.getUser(chat.otherUser.id);
-      chat.otherUser.publicKey = user.publicKey || null;
-    } catch {}
-  }
-}
-
 // Returns a v2 envelope string, or null if the ratchet cannot send yet.
 function ratchetEncryptFor(chat, plaintext) {
   return withRatchetLock(chat.id, async () => {
@@ -976,174 +617,26 @@ function ratchetDecryptFor(chat, env) {
   });
 }
 
-// ============ Lote 3: E2EE de grupos (Sender Keys) ============
-// Estado local: minha sender key por grupo; para quem já distribuí; e o estado
-// de destinatário por (grupo, remetente). Nada disso sai em claro do aparelho.
-const gskKey = (gid) => `speedvox_gsk_${state.me.id}_${gid}`;
-const gskDistKey = (gid) => `speedvox_gskdist_${state.me.id}_${gid}`;
-const grkKey = (gid, sid) => `speedvox_grk_${state.me.id}_${gid}_${sid}`;
-const gLoad = (k) => { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } };
-const gSave = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
-const saveJSON = gSave;
-
-const _pubKeyCache = new Map();
-async function getUserPublicKey(userId) {
-  if (_pubKeyCache.has(userId)) return _pubKeyCache.get(userId);
-  let pub = null;
-  for (const chat of state.chats.values()) {
-    const mem = (chat.members || []).find((x) => x.id === userId);
-    if (mem && mem.publicKey) { pub = mem.publicKey; break; }
-  }
-  if (!pub) { try { const { user } = await api.getUser(userId); pub = user.publicKey || null; } catch {} }
-  if (pub) _pubKeyCache.set(userId, pub);
-  return pub;
-}
-
-async function getMySenderKey(groupId) {
-  let sk = gLoad(gskKey(groupId));
-  if (!sk) { sk = await groupcrypto.createSenderKey(); gSave(gskKey(groupId), sk); gSave(gskDistKey(groupId), []); }
-  return sk;
-}
-
-// Envia minha distribution message a UM membro, cifrada par-a-par (só ele lê).
-async function distributeSenderKeyTo(chat, memberId) {
-  if (!chat || memberId === state.me.id) return false;
-  const sk = await getMySenderKey(chat.id);
-  const pub = await getUserPublicKey(memberId);
-  if (!pub) return false;
-  const key = await e2ee.deriveChatKey(pub);
-  if (!key) return false;
-  const encDist = JSON.stringify(await e2ee.encrypt(key, JSON.stringify(groupcrypto.distributionMessage(sk))));
-  state.socket.emit('group:senderkey', { to: memberId, groupId: chat.id, dist: encDist });
-  return true;
-}
-
-// Garante que todos os membros atuais tenham a minha sender key.
-async function ensureSenderKeyDistributed(chat) {
-  await getMySenderKey(chat.id);
-  const done = new Set(gLoad(gskDistKey(chat.id)) || []);
-  for (const m of (chat.members || [])) {
-    if (m.id === state.me.id || done.has(m.id)) continue;
-    if (await distributeSenderKeyTo(chat, m.id)) done.add(m.id);
-  }
-  gSave(gskDistKey(chat.id), [...done]);
-}
-
-async function groupEncryptFor(chat, plaintext) {
-  if (!state.e2eeReady) return null;
-  await ensureSenderKeyDistributed(chat);
-  const sk = await getMySenderKey(chat.id);
-  const { env, sender } = await groupcrypto.senderEncrypt(sk, plaintext);
-  gSave(gskKey(chat.id), sender);
-  return JSON.stringify(env);
-}
-
-async function groupDecryptFor(groupId, senderId, env) {
-  const recv = gLoad(grkKey(groupId, senderId));
-  if (!recv) return null; // ainda não tenho a sender key desse remetente
-  const { plaintext, recv: newRecv } = await groupcrypto.receiverDecrypt(recv, env);
-  gSave(grkKey(groupId, senderId), newRecv);
-  return plaintext;
-}
-
-const _skReqAt = new Map();
-function requestSenderKey(groupId, senderId) {
-  if (!senderId || senderId === state.me.id) return;
-  const k = `${groupId}|${senderId}`;
-  const now = Date.now();
-  if (_skReqAt.get(k) && now - _skReqAt.get(k) < 8000) return; // debounce
-  _skReqAt.set(k, now);
-  try { state.socket.emit('group:senderkey:request', { to: senderId, groupId }); } catch {}
-}
-
-function retryGroupDecrypt(groupId, senderId) {
-  const list = state.messages.get(groupId) || [];
-  for (const m of list) {
-    if (m.senderId === senderId && m.encrypted && m._decryptFailed) {
-      m._decryptFailed = false; m._plain = null; decryptInto(m);
-    }
-  }
-}
-
 // Decrypt an incoming encrypted message in place, then refresh the views.
 async function decryptInto(m) {
   const chat = state.chats.get(m.chatId);
   let env = null;
   try { env = JSON.parse(m.body); } catch {}
   try {
-    let pt = null;
-    if (env && env.gk === 1) {
-      // Mensagem de GRUPO (Sender Keys). Se ainda não tenho a chave do
-      // remetente, peço e mostro "decifrando" até ela chegar.
-      pt = await groupDecryptFor(m.chatId, m.senderId, env);
-      if (pt == null) requestSenderKey(m.chatId, m.senderId);
-    } else if (env && env.v === 2) {
-      // Forward-secret (Double Ratchet) message (chat direto).
-      pt = await ratchetDecryptFor(chat, env);
+    if (env && env.v === 2) {
+      // Forward-secret (Double Ratchet) message.
+      const pt = await ratchetDecryptFor(chat, env);
+      if (pt != null) { m._plain = pt; m._decryptFailed = false; }
+      else m._decryptFailed = true;
     } else {
       // Legacy/static AES message (also used for edits/forwards).
       const key = await ensureChatKey(chat);
-      pt = key ? await e2ee.decrypt(key, m.body) : null;
+      if (!key) m._decryptFailed = true;
+      else { m._plain = await e2ee.decrypt(key, m.body); m._decryptFailed = false; }
     }
-    if (pt == null) { m._decryptFailed = true; }
-    else { applyDecryptedPlain(m, pt); m._decryptFailed = false; }
   } catch { m._decryptFailed = true; }
   if (m.chatId === state.activeChatId) renderMessages(true);
   renderChatList();
-}
-
-// Trata o texto decifrado. Para mídia E2EE (Lote 2), o "plaintext" é um envelope
-// JSON com a chave do arquivo (mk/iv) + nome/mime + legenda — não é texto visível.
-function applyDecryptedPlain(m, pt) {
-  if (['image', 'video', 'audio', 'file'].includes(m.type)) {
-    try {
-      const mv = JSON.parse(pt);
-      if (mv && mv.mk && mv.iv) {
-        m._mediaKeyB64 = mv.mk;
-        m._mediaIvB64 = mv.iv;
-        m._mediaEncrypted = true;
-        if (mv.name && !m.mediaName) m.mediaName = mv.name;
-        if (mv.mime && !m.mediaMime) m.mediaMime = mv.mime;
-        m._plain = mv.caption || '';
-        return;
-      }
-    } catch { /* não é envelope de mídia — trata como texto */ }
-  }
-  m._plain = pt;
-}
-
-// ---------------------------------------------- Lote 2: E2EE de mídia (anexos)
-// Cifra os BYTES do arquivo com uma chave aleatória por mídia; o servidor guarda
-// só o blob cifrado. A chave viaja no corpo E2EE da mensagem. Mídia antiga (sem
-// cifra) segue abrindo normalmente — mudança aditiva.
-function b64ToBytes(str) {
-  const bin = atob(str);
-  const out = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-  return out;
-}
-
-async function encryptFileBytes(file) {
-  const key = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, true, ['encrypt', 'decrypt']);
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const buf = await file.arrayBuffer();
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, buf);
-  const rawKey = new Uint8Array(await crypto.subtle.exportKey('raw', key));
-  const encFile = new File([ct], (file.name || 'media') + '.enc', { type: 'application/octet-stream' });
-  return { encFile, mk: bytesToB64(rawKey), iv: bytesToB64(iv) };
-}
-
-// Baixa o blob cifrado e devolve um objectURL já decifrado para exibir.
-async function decryptMediaToUrl(m) {
-  const rawKey = b64ToBytes(m._mediaKeyB64);
-  const iv = b64ToBytes(m._mediaIvB64);
-  const key = await crypto.subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']);
-  const res = await fetch(mediaUrl(m.mediaUrl));
-  if (!res.ok) throw new Error('fetch falhou');
-  const ct = await res.arrayBuffer();
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
-  const blob = new Blob([pt], { type: m.mediaMime || 'application/octet-stream' });
-  return URL.createObjectURL(blob);
 }
 
 // Plaintext to display for a message (handles encrypted bodies).
@@ -1151,79 +644,6 @@ function displayText(m) {
   if (!m.encrypted) return m.body;
   if (m._plain != null) return m._plain;
   return null; // not yet decrypted (or failed)
-}
-
-// ---------------------------------------------------- identity verification
-// "Número de segurança" (safety number), estilo Signal: um valor derivado das
-// DUAS chaves de identidade. Se o servidor trocar a chave de alguém (ataque de
-// intermediário), o número muda — e os dois lados percebem ao comparar.
-async function jwkPubToRaw(jwkStr) {
-  const jwk = typeof jwkStr === 'string' ? JSON.parse(jwkStr) : jwkStr;
-  const key = await crypto.subtle.importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, true, []);
-  return new Uint8Array(await crypto.subtle.exportKey('raw', key));
-}
-
-async function computeSafetyNumber(myPubStr, theirPubStr) {
-  const a = await jwkPubToRaw(myPubStr);
-  const b = await jwkPubToRaw(theirPubStr);
-  // Ordem independente: ordena as duas chaves cruas para os dois lados obterem
-  // exatamente o mesmo número.
-  const cmp = (x, y) => { const n = Math.min(x.length, y.length); for (let i = 0; i < n; i++) if (x[i] !== y[i]) return x[i] - y[i]; return x.length - y.length; };
-  const [first, second] = cmp(a, b) <= 0 ? [a, b] : [b, a];
-  const combined = new Uint8Array(first.length + second.length);
-  combined.set(first, 0); combined.set(second, first.length);
-  // Alonga o cálculo um pouco (defesa em profundidade) e converte em dígitos.
-  let h = new Uint8Array(await crypto.subtle.digest('SHA-256', combined));
-  for (let i = 0; i < 4999; i++) h = new Uint8Array(await crypto.subtle.digest('SHA-256', h));
-  let digits = '';
-  let src = h;
-  while (digits.length < 60) {
-    for (const byte of src) { digits += (byte % 10); if (digits.length >= 60) break; }
-    if (digits.length < 60) src = new Uint8Array(await crypto.subtle.digest('SHA-256', src));
-  }
-  return digits.slice(0, 60).replace(/(\d{5})(?=\d)/g, '$1 ');
-}
-
-async function openSafetyNumber(chat) {
-  const mine = e2ee.myPublicKey();
-  let theirs = chat.otherUser && chat.otherUser.publicKey;
-  if (!theirs && chat.otherUser) {
-    try { const { user } = await api.getUser(chat.otherUser.id); theirs = user.publicKey; chat.otherUser.publicKey = theirs || null; } catch {}
-  }
-  if (!mine || !theirs) { toast('Ainda não há chaves de criptografia para este contato'); return; }
-
-  let number;
-  try { number = await computeSafetyNumber(mine, theirs); }
-  catch { toast('Não foi possível calcular o número de segurança'); return; }
-
-  const vkey = `speedvox_verified_${chat.otherUser.id}`;
-  const statusLine = el('div', { class: 'auth-hint', style: 'margin:0;text-align:center' });
-  const toggle = el('button', { class: 'btn-primary', style: 'margin-top:8px' });
-  const refresh = () => {
-    const v = localStorage.getItem(vkey);
-    if (v === number) statusLine.textContent = '✅ Verificado — a identidade confere.';
-    else if (v) statusLine.textContent = '⚠️ A chave mudou desde a verificação! Confirme com o contato por outro meio.';
-    else statusLine.textContent = 'Ainda não verificado. Compare os dígitos abaixo com os do contato.';
-    toggle.textContent = v === number ? 'Remover verificação' : 'Marcar como verificado';
-  };
-  toggle.onclick = () => {
-    if (localStorage.getItem(vkey) === number) localStorage.removeItem(vkey);
-    else localStorage.setItem(vkey, number);
-    refresh();
-  };
-  refresh();
-
-  const qr = el('div', { style: 'display:flex;justify-content:center;margin:12px 0' });
-  try { qr.innerHTML = qrSVG(`speedvox-sn:${number.replace(/ /g, '')}`, { size: 200, margin: 4 }); } catch {}
-
-  const body = el('div', { class: 'modal-body' },
-    el('p', { class: 'auth-hint', style: 'margin-top:0' },
-      `Compare estes 60 dígitos (ou o QR) com os que ${chat.otherUser.displayName} vê no aparelho dele. Se forem idênticos, ninguém está no meio da conversa.`),
-    qr,
-    el('div', { style: 'font-family:monospace;font-size:18px;letter-spacing:1px;line-height:1.9;text-align:center;word-break:break-word' }, number),
-    el('div', { style: 'margin-top:12px' }, statusLine),
-    toggle);
-  modalShell('🔐 Número de segurança', body);
 }
 
 // ------------------------------------------------------------------ data load
@@ -1247,11 +667,6 @@ async function loadChats() {
 async function openChat(chatId) {
   state.activeChatId = chatId;
   state.replyTo = null;
-  state.ghostModeActive = false;
-  updateComposerPlaceholder();
-  hideComposerPreview();
-  clearTimeout(composerPreviewTimer);
-  composerPreviewTimer = null;
   state.composerMentions.clear();
   $('#mention-suggest').classList.add('hidden');
   $('#reply-preview').classList.add('hidden');
@@ -1277,16 +692,7 @@ async function reloadActiveMessages(silent) {
   if (!state.activeChatId) return;
   const { messages } = await api.getMessages(state.activeChatId);
   state.messages.set(state.activeChatId, messages);
-  for (const m of messages) if (m.encrypted && m._plain == null) decryptInto(m);
   renderMessages(silent);
-}
-
-function syncActiveMessagesSoon() {
-  if (!state.activeChatId) return;
-  clearTimeout(syncActiveMessagesSoon._timer);
-  syncActiveMessagesSoon._timer = setTimeout(() => {
-    reloadActiveMessages(true).catch(() => {});
-  }, 200);
 }
 
 function addMessage(message, clientId) {
@@ -1330,7 +736,7 @@ function chatItemNode(chat) {
     : '';
 
   const menuBtn = el('button', { class: 'chat-item-menu', title: 'Opções',
-    onclick: (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, chat); } }, icon('more-vertical', { size: 18 }));
+    onclick: (e) => { e.stopPropagation(); openChatMenu(e.currentTarget, chat); } }, '⋮');
 
   return el('li', {
     class: `chat-item${chat.id === state.activeChatId ? ' active' : ''}`,
@@ -1347,7 +753,7 @@ function chatItemNode(chat) {
     menuBtn);
 }
 
-const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas'], ['status', 'Status']];
+const FOLDERS = [['all', 'Todas'], ['unread', 'Não lidas'], ['groups', 'Grupos'], ['direct', 'Diretas']];
 function renderFolderTabs() {
   const bar = $('#folder-tabs');
   if (!bar) return;
@@ -1364,13 +770,6 @@ function renderChatList() {
   const filter = $('#chat-search').value.trim().toLowerCase();
   const list = $('#chat-list');
   list.innerHTML = '';
-
-  const folder = state.chatFolder || 'all';
-  if (folder === 'status') {
-    renderStatusList();
-    return;
-  }
-
   const all = [...state.chats.values()].sort((a, b) => {
     if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
     const at = a.lastMessage ? a.lastMessage.createdAt : 0;
@@ -1381,6 +780,7 @@ function renderChatList() {
   const archived = visible.filter((c) => c.archived);
   let active = visible.filter((c) => !c.archived);
   // Chat folders (Telegram-style filters).
+  const folder = state.chatFolder || 'all';
   if (folder === 'unread') active = active.filter((c) => c.unread > 0);
   else if (folder === 'groups') active = active.filter((c) => c.type === 'group');
   else if (folder === 'direct') active = active.filter((c) => c.type !== 'group');
@@ -1398,15 +798,15 @@ function renderChatList() {
 function openChatMenu(anchor, chat) {
   document.querySelector('.popup-menu')?.remove();
   const menu = el('div', { class: 'popup-menu' });
-  const item = (iconName, label, fn) => el('div', { class: 'popup-item', onclick: async (e) => {
+  const item = (label, fn) => el('div', { class: 'popup-item', onclick: async (e) => {
     e.stopPropagation(); menu.remove(); await fn();
-  } }, icon(iconName, { size: 18 }), el('span', {}, label));
+  } }, label);
 
-  menu.append(item('pin', chat.pinned ? 'Desafixar' : 'Fixar', () => api.pinChat(chat.id, !chat.pinned).then(applyChatPatch)));
-  menu.append(item('archive', chat.archived ? 'Desarquivar' : 'Arquivar', () => api.archiveChat(chat.id, !chat.archived).then(applyChatPatch)));
-  menu.append(item(chat.muted ? 'bell' : 'bell-off', chat.muted ? 'Reativar som' : 'Silenciar 8h', () =>
+  menu.append(item(chat.pinned ? 'Desafixar' : 'Fixar', () => api.pinChat(chat.id, !chat.pinned).then(applyChatPatch)));
+  menu.append(item(chat.archived ? 'Desarquivar' : 'Arquivar', () => api.archiveChat(chat.id, !chat.archived).then(applyChatPatch)));
+  menu.append(item(chat.muted ? 'Reativar som' : 'Silenciar 8h', () =>
     api.muteChat(chat.id, chat.muted ? 0 : Date.now() + 8 * 3600 * 1000).then(applyChatPatch)));
-  menu.append(item('clock', `Mensagens temporárias${chat.disappearingTimer ? ' (ativas)' : ''}`, () => quickDisappearing(chat)));
+  menu.append(item(`⏱ Mensagens temporárias${chat.disappearingTimer ? ' (ativas)' : ''}`, () => quickDisappearing(chat)));
 
   document.body.append(menu);
   const r = anchor.getBoundingClientRect();
@@ -1523,7 +923,7 @@ function callMessageNode(m) {
   const chat = state.chats.get(m.chatId);
   const callBack = el('button', { class: 'call-log-btn', title: 'Ligar de volta',
     onclick: () => { if (chat && chat.otherUser) state.calls.startCall(chat.otherUser, c.media); } },
-    icon(c.media === 'video' ? 'video' : 'phone', { size: 17 }));
+    c.media === 'video' ? '🎥' : '📞');
   const mine = m.senderId === state.me.id;
   const dir = mine ? '↗' : '↙'; // feita / recebida
   return el('div', { class: `call-log${missed ? ' missed' : ''}` },
@@ -1608,106 +1008,52 @@ function renderMessages(keepScroll) {
     if (m.deleted) {
       parts.push(el('div', { class: 'msg-body msg-deleted' }, '🚫 Esta mensagem foi apagada'));
     } else {
-      const srcUrl = m._decryptedUrl || m._localMediaUrl || (m.mediaUrl ? mediaUrl(m.mediaUrl) : null);
-      const isMediaMsg = ['image', 'video', 'audio', 'file'].includes(m.type);
-      if (m.encrypted && isMediaMsg && m._decryptFailed) {
-        // Não conseguimos a chave (corpo E2EE) — não tente abrir o blob cifrado.
-        parts.push(el('div', { class: 'msg-media' }, '🔒 Mídia cifrada — não foi possível abrir'));
-      } else if (m._mediaEncrypted && !m._decryptedUrl) {
-        // Descriptografa o blob e re-renderiza quando pronto.
-        if (!m._mediaDecrypting && !m._mediaDecryptFailed) {
-          m._mediaDecrypting = true;
-          decryptMediaToUrl(m)
-            .then((u) => { m._decryptedUrl = u; m._mediaDecrypting = false; if (m.chatId === state.activeChatId) renderMessages(true); })
-            .catch(() => { m._mediaDecryptFailed = true; m._mediaDecrypting = false; if (m.chatId === state.activeChatId) renderMessages(true); });
-        }
-        parts.push(el('div', { class: 'msg-media' },
-          m._mediaDecryptFailed ? '🔒 Mídia cifrada — não foi possível abrir' : '🔒 Descriptografando…'));
-      } else if (m.type === 'image' && m.mediaUrl) {
-        const mu = srcUrl;
-        const ext = (m.mediaName || m.mediaUrl || '').split('.').pop().toLowerCase();
-        // SVG and some rare formats browsers may not display inline — open in new tab.
-        const openable = !['svg','bmp','tiff','tif','raw','jxl'].includes(ext);
-        const showImg = () => {
-          const img = el('img', {
-            src: mu, loading: 'lazy', class: 'msg-img',
-            onclick: () => openable ? openLightbox(mu, m.mediaName) : window.open(mu, '_blank'),
-          });
-          return img;
-        };
+      if (m.type === 'image' && m.mediaUrl) {
+        const mu = mediaUrl(m.mediaUrl);
+        const showImg = () => el('img', { src: mu, loading: 'lazy', onclick: () => window.open(mu, '_blank') });
         if (autoDownloadOn()) {
           parts.push(el('div', { class: 'msg-media' }, showImg()));
+        } else if (m.mediaThumb) {
+          // Prévia desfocada (estilo WhatsApp): mostra a miniatura borrada; toque
+          // baixa a foto cheia. Economiza dados até a pessoa querer ver.
+          const wrap = el('div', { class: 'msg-media media-blur' },
+            el('img', { class: 'blur-thumb', src: m.mediaThumb }),
+            el('div', { class: 'media-load-badge' }, '⬇ Ver foto'));
+          wrap.onclick = () => { wrap.className = 'msg-media'; wrap.innerHTML = ''; wrap.append(showImg()); };
+          parts.push(wrap);
         } else {
           const wrap = el('div', { class: 'msg-media' });
           const btn = el('button', { class: 'media-download-btn',
-            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } },
-            '⬇ Baixar foto');
+            onclick: () => { wrap.innerHTML = ''; wrap.append(showImg()); } }, '⬇ Baixar foto');
           wrap.append(btn);
           parts.push(wrap);
         }
       } else if (m.type === 'video' && m.mediaUrl) {
-        const vu = srcUrl;
-        const showVid = () => el('video', { class: 'msg-video', src: vu, controls: '',
-          preload: 'metadata', playsinline: '' });
+        const vu = mediaUrl(m.mediaUrl);
+        const player = (auto) => el('video', { class: 'msg-video', src: vu, controls: '',
+          preload: 'metadata', playsinline: '', autoplay: auto ? '' : null });
         if (autoDownloadOn()) {
-          parts.push(el('div', { class: 'msg-media' }, showVid()));
+          parts.push(el('div', { class: 'msg-media' }, player(false)));
         } else {
-          const wrap = el('div', { class: 'msg-media' });
-          const btn = el('button', { class: 'media-download-btn',
-            onclick: () => { wrap.innerHTML = ''; wrap.append(showVid()); } },
-            '▶ Carregar vídeo');
-          wrap.append(btn);
+          // Prévia do vídeo com botão de play. Toque → carrega e dá play.
+          const wrap = el('div', { class: 'msg-media media-video-ph' });
+          if (m.mediaThumb) wrap.append(el('img', { class: 'blur-thumb', src: m.mediaThumb }));
+          wrap.append(el('div', { class: 'media-play' }, '▶'));
+          wrap.onclick = () => { wrap.className = 'msg-media'; wrap.innerHTML = ''; wrap.append(player(true)); };
           parts.push(wrap);
         }
       } else if (m.type === 'audio' && m.mediaUrl) {
-        const src = srcUrl;
-        const audioNode = buildAudioPlayer(src, m.mediaName);
-        if (m.transcription) {
-          const transWrap = el('div', { class: 'msg-audio-transcription', style: 'margin-top: 8px; font-size: 13px; border-top: 1px dashed var(--border); padding-top: 8px;' });
-          const toggleBtn = el('button', {
-            style: 'background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: 11px; display: flex; align-items: center; gap: 4px; margin-bottom: 6px; font-weight: bold;',
-            onclick: () => {
-              contentWrap.classList.toggle('hidden');
-              toggleBtn.textContent = contentWrap.classList.contains('hidden') ? '📝 Ver Transcrição e Resumo' : '📖 Ocultar Transcrição';
-            }
-          }, '📝 Ver Transcrição e Resumo');
-          const contentWrap = el('div', { class: 'hidden', style: 'display: flex; flex-direction: column; gap: 6px;' });
-          contentWrap.append(
-            el('div', { style: 'font-style: italic; color: var(--text-2); line-height: 1.4;' }, `"${m.transcription.transcript}"`),
-            el('div', { style: 'background: var(--panel-3); padding: 8px; border-radius: 8px; font-size: 12px; line-height: 1.4; color: var(--text-1); border-left: 3px solid var(--accent); white-space: pre-wrap;' }, m.transcription.summary)
-          );
-          transWrap.append(toggleBtn, contentWrap);
-          audioNode.append(transWrap);
-        }
-        parts.push(audioNode);
+        parts.push(el('div', { class: 'msg-audio' },
+          el('audio', { controls: '', src: mediaUrl(m.mediaUrl), preload: 'none' })));
       } else if (m.type === 'file' && m.mediaUrl) {
-        const ic = fileIcon(m.mediaName, m.mediaMime);
-        const sizeStr = m.mediaSize ? formatBytes(m.mediaSize) : '';
-        parts.push(el('a', {
-          class: 'msg-file', href: srcUrl, target: '_blank',
-          download: m.mediaName || '',
-        },
-          el('span', { class: 'file-ic' }, ic),
-          el('div', { class: 'file-info' },
-            el('span', { class: 'file-name' }, m.mediaName || 'Arquivo'),
-            sizeStr ? el('span', { class: 'file-size' }, sizeStr) : ''
-          ),
-          el('span', { class: 'file-dl', title: 'Baixar' }, '⬇')
-        ));
+        parts.push(el('a', { class: 'msg-file', href: mediaUrl(m.mediaUrl), target: '_blank' },
+          el('span', { class: 'file-ic' }, '📄'),
+          el('span', {}, m.mediaName || 'Arquivo')));
       } else if (m.type === 'poll' && m.poll) {
         parts.push(pollNode(m));
-      } else if (m.type === 'location') {
-        parts.push(locationNode(m));
-      } else if (m.type === 'contact') {
-        parts.push(contactCardNode(m));
-      } else if (m.type === 'event') {
-        parts.push(eventNode(m));
-      } else if (m.type === 'pix') {
-        parts.push(pixNode(m));
       }
-      const CARD_TYPES = ['poll', 'location', 'contact', 'event', 'pix'];
-      const text = CARD_TYPES.includes(m.type) ? null : displayText(m);
-      if (m.encrypted && text == null && !CARD_TYPES.includes(m.type)) {
+      const text = m.type === 'poll' ? null : displayText(m);
+      if (m.encrypted && text == null && m.type !== 'poll') {
         parts.push(el('div', { class: 'msg-body msg-encrypted' },
           m._decryptFailed ? '🔒 Não foi possível decifrar' : '🔒 Decifrando…'));
       } else if (text) {
@@ -1718,48 +1064,7 @@ function renderMessages(keepScroll) {
       }
     }
 
-    if (m._timerInterval) {
-      clearInterval(m._timerInterval);
-      m._timerInterval = null;
-    }
-
-    let ghostTimerEl = null;
-    if (m.ghostTtl && m.ghostTtl > 0 && !m.deleted) {
-      const isRead = !mine || (m.readBy && m.readBy.length > 0);
-      ghostTimerEl = el('span', { class: 'ghost-timer', style: 'margin-right: 6px; font-weight: bold; color: var(--accent); cursor: default;' });
-      
-      if (isRead) {
-        if (!m._readAt) m._readAt = Date.now();
-        const elapsed = (Date.now() - m._readAt) / 1000;
-        const remaining = Math.max(0, m.ghostTtl - elapsed);
-        
-        let secondsLeft = Math.ceil(remaining);
-        ghostTimerEl.textContent = `👻 ${secondsLeft}s`;
-        
-        const interval = setInterval(() => {
-          secondsLeft--;
-          if (secondsLeft <= 0) {
-            clearInterval(interval);
-            ghostTimerEl.textContent = `👻 0s`;
-            const bubble = container.querySelector(`[data-mid="${m.id}"]`);
-            if (bubble) {
-              bubble.style.transition = 'opacity 0.8s ease-out, transform 0.8s ease-out';
-              bubble.style.opacity = '0';
-              bubble.style.transform = 'scale(0.8) translateY(-10px)';
-            }
-          } else {
-            ghostTimerEl.textContent = `👻 ${secondsLeft}s`;
-          }
-        }, 1000);
-        m._timerInterval = interval;
-      } else {
-        ghostTimerEl.textContent = '👻';
-        ghostTimerEl.title = 'Mensagem fantasma (aguardando leitura)';
-      }
-    }
-
     const meta = el('div', { class: 'msg-meta' },
-      ghostTimerEl || '',
       m.starred && !m.deleted ? el('span', { class: 'star-label', title: 'Favorita' }, '★') : '',
       m.editedAt && !m.deleted ? el('span', { class: 'edited-label' }, 'editada') : '',
       fmtTime(m.createdAt),
@@ -1781,15 +1086,14 @@ function renderMessages(keepScroll) {
     const myRole = (chat.members.find((x) => x.id === state.me.id) || {}).role;
     const canPin = !m.deleted && (chat.type === 'direct' || myRole === 'admin');
     const actions = el('div', { class: 'msg-actions' },
-      m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, icon('reply')),
-      m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, icon('smile')),
-      m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, icon('star', { fill: m.starred })),
-      m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, icon('forward')),
-      canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, icon('pin')) : '',
-      m.deleted ? '' : el('button', { title: 'Criar Tarefa', onclick: () => createTaskFromMessage(m) }, icon('task')),
+      m.deleted ? '' : el('button', { title: 'Responder', onclick: () => setReply(m) }, '↩'),
+      m.deleted ? '' : el('button', { title: 'Reagir', onclick: (e) => openReactionPicker(e.currentTarget, m) }, '😊'),
+      m.deleted ? '' : el('button', { title: m.starred ? 'Desfavoritar' : 'Favoritar', onclick: () => toggleStar(m) }, m.starred ? '★' : '☆'),
+      m.deleted ? '' : el('button', { title: 'Encaminhar', onclick: () => forwardMessage(m) }, '↪'),
+      canPin ? el('button', { title: 'Fixar', onclick: () => pinMessage(m) }, '📌') : '',
       mine && !m.deleted && m.type === 'text'
-        ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, icon('edit')) : '',
-      mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, icon('trash')) : '');
+        ? el('button', { title: 'Editar', onclick: () => startEdit(m) }, '✎') : '',
+      mine && !m.deleted ? el('button', { title: 'Apagar', onclick: () => deleteMessage(m) }, '🗑') : '');
     parts.push(actions);
 
     container.append(el('div', { class: `msg ${mine ? 'out' : 'in'}`, 'data-mid': m.id }, ...parts));
@@ -1813,13 +1117,12 @@ function clearReply() {
   state.editing = null;
   $('#reply-preview').classList.add('hidden');
 }
-function react(m, emoji) { haptic('light'); state.socket.emit('message:react', { messageId: m.id, emoji }); }
+function react(m, emoji) { state.socket.emit('message:react', { messageId: m.id, emoji }); }
 function deleteMessage(m) {
   if (confirm('Apagar esta mensagem para todos?')) state.socket.emit('message:delete', { messageId: m.id });
 }
 
 async function toggleStar(m) {
-  haptic('light');
   try {
     const { starred } = await api.starMessage(m.id, !m.starred);
     m.starred = starred;
@@ -1907,9 +1210,9 @@ function previewCardFrom(url, d) {
       onerror: function () { this.remove(); } }));
   }
   const body = el('div', { class: 'link-preview-body' });
-  body.append(el('div', { class: 'link-preview-site' }, d.site || hostOf(url)));
   if (d.title) body.append(el('div', { class: 'link-preview-title' }, d.title));
   if (d.description) body.append(el('div', { class: 'link-preview-desc' }, d.description));
+  body.append(el('div', { class: 'link-preview-site' }, d.site || hostOf(url)));
   card.append(body);
   return card;
 }
@@ -2148,7 +1451,7 @@ function optimisticMessage(payload) {
     mediaUrl: payload.mediaUrl || null,
     mediaName: payload.mediaName || null,
     mediaMime: payload.mediaMime || null,
-    _localMediaUrl: payload._localMediaUrl || null,
+    mediaThumb: payload.mediaThumb || null,
     replyTo: payload.replyTo || null,
     mentions: payload.mentions || [],
     forwarded: Boolean(payload.forwarded),
@@ -2164,20 +1467,14 @@ function optimisticMessage(payload) {
 }
 
 // Try to deliver one queued payload. Updates pending/failed state on the bubble.
-async function deliver(payload) {
-  if (!socketIsConnected()) {
-    if (state.socket && typeof state.socket.connect === 'function') {
-      try { state.socket.connect(); } catch { /* Socket.IO will retry on its own too. */ }
-    }
-    const reachable = await hasInternetConnection({ timeoutMs: 2500 });
-    if (reachable) {
-      updateNetIndicator();
-      return;
-    }
+function deliver(payload) {
+  if (!state.socket || !state.socket.connected) {
+    // No server link — route over the mesh if it is up, otherwise stay queued.
+    // The mesh hops the message toward the recipient and holds it if there's no
+    // path yet (store-and-forward), so it lands when a route appears.
     if (state.mesh && state.mesh.enabled) meshDeliver(payload);
     return;
   }
-
   state.socket.emit('message:send', payload, (res) => {
     if (res && res.error) markFailed(payload.clientId);
     else if (res && res.ok) removeFromOutbox(payload.clientId);
@@ -2221,7 +1518,6 @@ function flushOutbox() {
 
 // plainText: original plaintext to show optimistically when payload.body is ciphertext.
 function queueAndSend(payload, plainText) {
-  haptic('light');
   payload.clientId = newClientId();
   addToOutbox(payload);
   const opt = optimisticMessage(payload);
@@ -2230,112 +1526,44 @@ function queueAndSend(payload, plainText) {
   deliver(payload);
 }
 
-let _sendGuard = false;
-
-async function sendTextMessageFromComposer(isFromEnter = false) {
+async function sendMessage() {
   const input = $('#message-input');
-  if (!input) return false;
-
   const body = input.value.trim();
-  if (!body || !state.activeChatId) {
-    requestAnimationFrame(() => input.focus());
-    return false;
-  }
+  if (!body || !state.activeChatId) return;
 
-  // Envio direto e robusto (sem blur/timeout, que travavam em vários celulares).
-  // A guarda evita duplicidade quando touch/pointer/click chegam juntos.
-  if (_sendGuard) return false;
-  _sendGuard = true;
-
-  try {
-    if (localStorage.getItem('speedvox_panic_active') === '1') {
-      const msg = {
-        id: `local-fake-${Date.now()}`,
-        chatId: state.activeChatId,
-        senderId: state.me.id,
-        type: 'text',
-        body,
-        createdAt: Date.now(),
-        pending: false
-      };
-      const list = state.messages.get(state.activeChatId) || [];
-      list.push(msg);
-      state.messages.set(state.activeChatId, list);
-      const chat = state.chats.get(state.activeChatId);
-      if (chat) chat.lastMessage = msg;
-      input.value = '';
-      input.style.height = 'auto';
-      renderMessages(true);
-      renderChatList();
-
-      setTimeout(() => {
-        let replyText = 'Beleza!';
-        if (state.activeChatId === 'mock-1') replyText = 'Deus te abençoe, filho!';
-        else if (state.activeChatId === 'mock-2') replyText = 'Tá bom amor. Bjs!';
-        else if (state.activeChatId === 'mock-3') replyText = 'Entendido, obrigado pelo aviso.';
-        const replyMsg = {
-          id: `local-fake-${Date.now()}`,
-          chatId: state.activeChatId,
-          senderId: 'other',
-          type: 'text',
-          body: replyText,
-          createdAt: Date.now(),
-          pending: false
-        };
-        list.push(replyMsg);
-        if (chat) chat.lastMessage = replyMsg;
-        renderMessages(true);
-        renderChatList();
-      }, 1500 + Math.random() * 1500);
-      return true;
-    }
-
-    // Editing an existing message takes priority over sending a new one.
-    if (state.editing) {
-      input.value = '';
-      input.style.height = 'auto';
-      await applyEdit(body);
-      return true;
-    }
-
-    const chat = state.chats.get(state.activeChatId);
-    const payload = { chatId: state.activeChatId, body, type: 'text' };
-    if (state.ghostModeActive) payload.ghostTtl = 15;
-    if (state.replyTo) payload.replyTo = state.replyTo.id;
-
-    // Group @mentions.
-    if (chat && chat.type === 'group') {
-      const mentions = collectMentions(body);
-      if (mentions.length) payload.mentions = mentions;
-    }
-    state.composerMentions.clear();
-    $('#mention-suggest').classList.add('hidden');
-
-    // Encrypt end-to-end for direct chats (shared with scheduled sends).
-    const enc = await encryptOutgoing(chat, body);
-    payload.body = enc.body;
-    if (enc.encrypted) payload.encrypted = true;
-    const plainText = enc.plainText;
-
-    queueAndSend(payload, plainText);
+  // Editing an existing message takes priority over sending a new one.
+  if (state.editing) {
     input.value = '';
     input.style.height = 'auto';
-    hideComposerPreview();
-    clearReply();
-    
-    // Re-focus so mobile keyboard stays up for rapid follow-up messages.
-    requestAnimationFrame(() => input.focus());
-    if (state.socket && state.socket.connected) {
-      state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
-    }
-    return true;
-  } catch (err) {
-    console.error('sendTextMessageFromComposer', err);
-    toast(err && err.crypto ? err.message : 'Falha ao enviar mensagem. Tente novamente.');
-    requestAnimationFrame(() => input.focus());
-    return false;
-  } finally {
-    setTimeout(() => { _sendGuard = false; }, 250);
+    await applyEdit(body);
+    return;
+  }
+
+  const chat = state.chats.get(state.activeChatId);
+  const payload = { chatId: state.activeChatId, body, type: 'text' };
+  if (state.replyTo) payload.replyTo = state.replyTo.id;
+
+  // Group @mentions.
+  if (chat && chat.type === 'group') {
+    const mentions = collectMentions(body);
+    if (mentions.length) payload.mentions = mentions;
+  }
+  state.composerMentions.clear();
+  $('#mention-suggest').classList.add('hidden');
+
+  // Encrypt end-to-end for direct chats (shared with scheduled sends).
+  const enc = await encryptOutgoing(chat, body);
+  payload.body = enc.body;
+  if (enc.encrypted) payload.encrypted = true;
+  const plainText = enc.plainText;
+
+  // Input may have changed during async encryption; only clear if unchanged.
+  queueAndSend(payload, plainText);
+  input.value = '';
+  input.style.height = 'auto';
+  clearReply();
+  if (state.socket && state.socket.connected) {
+    state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false });
   }
 }
 
@@ -2343,53 +1571,12 @@ async function sendTextMessageFromComposer(isFromEnter = false) {
 // Ratchet, falls back to the static key, else plaintext. Returns the body to
 // send plus whether it's encrypted and the plaintext (for the local echo).
 async function encryptOutgoing(chat, body) {
-  // GRUPO: cifra com a minha sender key (E2EE de grupo). Best-effort — se algo
-  // falhar, envia em claro para o grupo não quebrar (v1). Fail-closed vem depois.
-  if (chat && chat.type === 'group') {
-    try {
-      const env = await groupEncryptFor(chat, body);
-      if (env) return { body: env, encrypted: true, plainText: body };
-    } catch (err) { console.warn('E2EE de grupo falhou; enviando em claro', err); }
-    return { body, encrypted: false, plainText: undefined };
-  }
-  if (!chat || chat.type !== 'direct') {
-    return { body, encrypted: false, plainText: undefined };
-  }
-
-  const hadPeerKey = Boolean(chat.otherUser && chat.otherUser.publicKey);
-
-  try {
+  if (chat && chat.type === 'direct') {
     const ratEnv = await ratchetEncryptFor(chat, body);
     if (ratEnv) return { body: ratEnv, encrypted: true, plainText: body };
-  } catch (err) {
-    console.warn('Double Ratchet encrypt failed; resetting this chat session', err);
-    await resetChatCryptoSession(chat);
-  }
-
-  try {
     const key = await ensureChatKey(chat);
     if (key) return { body: JSON.stringify(await e2ee.encrypt(key, body)), encrypted: true, plainText: body };
-  } catch (err) {
-    console.warn('Static E2EE encrypt failed; refreshing peer key', err);
-    await resetChatCryptoSession(chat);
   }
-
-  const peerHasKey = Boolean(chat.otherUser && chat.otherUser.publicKey);
-  if (hadPeerKey || peerHasKey) {
-    try {
-      await resetChatCryptoSession(chat);
-      const recoveredKey = await ensureChatKey(chat);
-      if (recoveredKey) {
-        return { body: JSON.stringify(await e2ee.encrypt(recoveredKey, body)), encrypted: true, plainText: body };
-      }
-    } catch (err) {
-      console.warn('E2EE recovery failed', err);
-    }
-    const error = new Error('Erro de segurança: não foi possível criptografar a mensagem. A sessão foi renegociada; tente enviar novamente.');
-    error.crypto = true;
-    throw error;
-  }
-
   return { body, encrypted: false, plainText: undefined };
 }
 
@@ -2406,12 +1593,7 @@ async function scheduleCurrentMessage() {
     const ts = new Date(when.value).getTime();
     if (!ts || ts < Date.now() + 5000) return toast('Escolha um horário no futuro');
     const chat = state.chats.get(state.activeChatId);
-    let enc;
-    try {
-      enc = await encryptOutgoing(chat, body);
-    } catch (err) {
-      return toast(err && err.crypto ? err.message : 'Falha ao preparar mensagem');
-    }
+    const enc = await encryptOutgoing(chat, body);
     const payload = { chatId: state.activeChatId, type: 'text', body: enc.body, sendAt: ts };
     if (enc.encrypted) payload.encrypted = true;
     state.socket.emit('message:send', payload, (res) => {
@@ -2426,64 +1608,6 @@ async function scheduleCurrentMessage() {
     el('p', { class: 'auth-hint', style: 'margin-top:6px' }, 'A mensagem fica guardada e é enviada automaticamente no horário escolhido.'),
     el('div', { style: 'margin-top:14px' }, confirm));
   const backdrop = modalShell('Agendar mensagem', bodyEl);
-}
-
-// Display pending scheduled messages for the active chat in a modal.
-async function showScheduledMessagesModal() {
-  if (!state.activeChatId) return;
-  const listEl = el('div', { style: 'max-height: 320px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding-right: 4px;' });
-
-  const refreshList = async () => {
-    listEl.innerHTML = '';
-    try {
-      const res = await fetch(apiUrl(`/api/chats/${state.activeChatId}/messages/scheduled`));
-      const data = await res.json();
-      const messages = data.messages || [];
-
-      if (!messages.length) {
-        listEl.append(el('p', { style: 'color: var(--text-2); text-align: center; margin: 20px 0;' }, 'Nenhuma mensagem agendada neste chat.'));
-        return;
-      }
-
-      for (const m of messages) {
-        if (m.encrypted && m._plain == null) {
-          await decryptInto(m);
-        }
-
-        const text = m.deleted ? '(Apagada)' : (m._decryptFailed ? '🔒 Não decifrado' : (m._plain || m.body));
-        const item = el('div', { style: 'background: var(--panel-3); padding: 12px; border-radius: 12px; display: flex; align-items: center; justify-content: space-between; gap: 10px; border: 1px solid var(--border);' });
-        const left = el('div', { style: 'flex: 1; min-width: 0;' });
-        left.append(el('div', { style: 'word-break: break-word; color: var(--text-1); font-size: 14px;' }, text));
-        left.append(el('div', { style: 'font-size: 11px; color: var(--text-2); margin-top: 6px; display: flex; align-items: center; gap: 4px;' }, '⏰ ' + new Date(m.sendAt).toLocaleString('pt-BR')));
-
-        const delBtn = el('button', {
-          style: 'background: none; border: none; font-size: 18px; cursor: pointer; color: #ff5252; padding: 6px; display: flex; align-items: center; justify-content: center; transition: transform 0.2s;',
-          title: 'Cancelar agendamento',
-          onclick: () => {
-            if (confirm('Cancelar e apagar esta mensagem agendada?')) {
-              state.socket.emit('message:delete', { messageId: m.id });
-              setTimeout(refreshList, 400); // refresh list
-            }
-          }
-        }, '🗑️');
-
-        item.append(left, delBtn);
-        listEl.append(item);
-      }
-    } catch (err) {
-      listEl.append(el('p', { style: 'color: #ff5252; text-align: center;' }, 'Erro ao carregar mensagens agendadas.'));
-    }
-  };
-
-  await refreshList();
-
-  const bodyEl = el('div', { class: 'modal-body' },
-    listEl,
-    el('div', { style: 'margin-top: 18px; display: flex; justify-content: flex-end;' },
-      el('button', { class: 'btn-primary', onclick: () => backdrop.remove() }, 'Fechar'))
-  );
-
-  const backdrop = modalShell('Mensagens Agendadas', bodyEl);
 }
 
 // Create a poll (Telegram-style) in the active chat.
@@ -2524,144 +1648,6 @@ function pollComposeModal() {
 }
 
 // Render a poll bubble with live results; tapping an option votes.
-// ---------------------------------------------- anexos: cartões (novos tipos)
-// Corpo dos cartões (location/contact/event/pix) — JSON, cifrado como texto em
-// chats E2EE. Lê do _plain (decifrado) ou do body (em claro).
-function cardData(m) {
-  const raw = m.encrypted ? m._plain : m.body;
-  if (raw == null) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-// Envia um cartão: monta o JSON, cifra igual a texto e envia pelo fluxo normal.
-async function sendCard(type, data) {
-  const chat = state.chats.get(state.activeChatId);
-  if (!chat) return toast('Abra uma conversa primeiro');
-  const enc = await encryptOutgoing(chat, JSON.stringify(data));
-  const payload = { chatId: chat.id, type, body: enc.body };
-  if (enc.encrypted) payload.encrypted = true;
-  queueAndSend(payload, enc.plainText);
-}
-
-function cardShell(iconName, title, ...children) {
-  return el('div', { class: 'attach-card' },
-    el('div', { class: 'attach-card-head' }, icon(iconName, { size: 18 }), el('span', {}, title)),
-    ...children);
-}
-
-// ---- Localização ----
-function sendLocationMessage() {
-  if (!navigator.geolocation) return toast('Localização indisponível neste aparelho');
-  toast('Obtendo localização…');
-  navigator.geolocation.getCurrentPosition(
-    (pos) => sendCard('location', { lat: +pos.coords.latitude.toFixed(6), lng: +pos.coords.longitude.toFixed(6) }),
-    () => toast('Não foi possível obter a localização (permissão negada?)'),
-    { enableHighAccuracy: true, timeout: 12000 });
-}
-function locationNode(m) {
-  const d = cardData(m);
-  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '📍 Localização');
-  const maps = `https://www.google.com/maps?q=${d.lat},${d.lng}`;
-  return cardShell('map-pin', 'Localização',
-    el('div', { class: 'attach-card-sub' }, `${d.lat}, ${d.lng}`),
-    el('a', { class: 'attach-card-btn', href: maps, target: '_blank', rel: 'noopener' }, 'Ver no mapa'));
-}
-
-// ---- Contato ----
-function shareContactModal() {
-  const directs = [...state.chats.values()].filter((c) => c.type === 'direct' && c.otherUser);
-  const list = el('div', {});
-  if (!directs.length) list.append(el('p', { class: 'auth-hint' }, 'Você ainda não tem contatos para compartilhar.'));
-  for (const c of directs) {
-    const u = c.otherUser;
-    const av = el('span', { class: 'avatar sm' }); avatarBg(av, u.avatarUrl, u.displayName);
-    list.append(el('div', { class: 'user-result', onclick: () => {
-      backdrop.remove();
-      sendCard('contact', { name: u.displayName, username: u.username || '', userId: u.id });
-    } }, av, el('div', { class: 'user-result-body' },
-      el('div', { class: 'user-result-name' }, u.displayName),
-      el('div', { class: 'user-result-sub' }, '@' + (u.username || '')))));
-  }
-  const backdrop = modalShell('Compartilhar contato', el('div', { class: 'modal-body' }, list));
-}
-function contactCardNode(m) {
-  const d = cardData(m);
-  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '👤 Contato');
-  const av = el('span', { class: 'avatar sm' }); avatarBg(av, null, d.name);
-  const open = d.userId ? el('button', { class: 'attach-card-btn', onclick: () => openChatWithUser(d.userId) }, 'Conversar') : '';
-  return el('div', { class: 'attach-card' },
-    el('div', { class: 'attach-card-head' }, icon('user', { size: 18 }), el('span', {}, 'Contato')),
-    el('div', { style: 'display:flex;align-items:center;gap:10px;margin-top:6px' }, av,
-      el('div', {}, el('div', { style: 'font-weight:600' }, d.name),
-        d.username ? el('div', { class: 'attach-card-sub' }, '@' + d.username) : '')),
-    open);
-}
-async function openChatWithUser(userId) {
-  try { const { chat } = await api.openDirect(userId); if (chat) { state.chats.set(chat.id, chat); renderChatList(); openChat(chat.id); } }
-  catch { toast('Não foi possível abrir a conversa'); }
-}
-
-// ---- Evento ----
-function eventComposeModal() {
-  const title = el('input', { type: 'text', placeholder: 'Título do evento' });
-  const when = el('input', { type: 'datetime-local' });
-  const place = el('input', { type: 'text', placeholder: 'Local (opcional)' });
-  const send = el('button', { class: 'btn-primary', onclick: () => {
-    if (!title.value.trim()) return toast('Dê um título ao evento');
-    const ts = when.value ? new Date(when.value).getTime() : 0;
-    if (!ts) return toast('Escolha data e hora');
-    backdrop.remove();
-    sendCard('event', { title: title.value.trim(), at: ts, place: place.value.trim() });
-  } }, 'Enviar evento');
-  const backdrop = modalShell('Novo evento', el('div', { class: 'modal-body' },
-    el('div', { class: 'field-label' }, 'Título'), title,
-    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Quando'), when,
-    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Local'), place,
-    el('div', { style: 'margin-top:14px' }, send)));
-}
-function eventNode(m) {
-  const d = cardData(m);
-  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '📅 Evento');
-  const dt = d.at ? new Date(d.at) : null;
-  const dstr = dt ? dt.toLocaleString('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }) : '';
-  const gcal = dt ? `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(d.title)}&dates=${gcalDate(dt)}/${gcalDate(new Date(d.at + 3600000))}${d.place ? '&location=' + encodeURIComponent(d.place) : ''}` : '';
-  return cardShell('calendar', 'Evento',
-    el('div', { style: 'font-weight:600;margin-top:4px' }, d.title),
-    dstr ? el('div', { class: 'attach-card-sub' }, '🗓️ ' + dstr) : '',
-    d.place ? el('div', { class: 'attach-card-sub' }, '📍 ' + d.place) : '',
-    gcal ? el('a', { class: 'attach-card-btn', href: gcal, target: '_blank', rel: 'noopener' }, 'Adicionar à agenda') : '');
-}
-function gcalDate(d) { return d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, ''); }
-
-// ---- Pix ----
-function pixComposeModal() {
-  const key = el('input', { type: 'text', placeholder: 'Chave Pix (CPF, e-mail, telefone, aleatória)' });
-  const name = el('input', { type: 'text', placeholder: 'Nome do recebedor (opcional)', value: state.me ? state.me.displayName : '' });
-  const amount = el('input', { type: 'number', placeholder: 'Valor R$ (opcional)', step: '0.01', min: '0' });
-  const send = el('button', { class: 'btn-primary', onclick: () => {
-    if (!key.value.trim()) return toast('Informe a chave Pix');
-    backdrop.remove();
-    sendCard('pix', { key: key.value.trim(), name: name.value.trim(), amount: amount.value ? Number(amount.value) : null });
-  } }, 'Enviar Pix');
-  const backdrop = modalShell('Enviar Pix', el('div', { class: 'modal-body' },
-    el('div', { class: 'field-label' }, 'Chave Pix'), key,
-    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Recebedor'), name,
-    el('div', { class: 'field-label', style: 'margin-top:10px' }, 'Valor'), amount,
-    el('div', { style: 'margin-top:14px' }, send)));
-}
-function pixNode(m) {
-  const d = cardData(m);
-  if (!d) return el('div', { class: 'attach-card' }, m.encrypted ? '🔒 Decifrando…' : '💠 Pix');
-  const val = (d.amount != null) ? ('R$ ' + Number(d.amount).toFixed(2).replace('.', ',')) : '';
-  const copy = el('button', { class: 'attach-card-btn', onclick: async () => {
-    try { await navigator.clipboard.writeText(d.key); toast('Chave Pix copiada'); } catch { toast('Copie a chave manualmente'); }
-  } }, 'Copiar chave Pix');
-  return cardShell('key', 'Pix' + (val ? ' · ' + val : ''),
-    d.name ? el('div', { style: 'font-weight:600;margin-top:4px' }, d.name) : '',
-    el('div', { class: 'attach-card-sub', style: 'word-break:break-all' }, d.key),
-    copy);
-}
-
 function pollNode(m) {
   const poll = m.poll;
   const total = poll.votes.length;
@@ -2696,119 +1682,55 @@ function fileToBase64(file) {
 // Deliver a media item. When online, upload to the server (full size, any file).
 // When offline but the mesh is up, send it chunked over the mesh so voice notes
 // and photos still reach nearby people in a blackout — no internet, no towers.
-// Tipo da mensagem a partir do mime (foto, vídeo, áudio ou arquivo genérico).
-function mediaTypeFor(mime) {
+// Tipo da mensagem a partir do mime E da extensão (foto, vídeo, áudio ou
+// arquivo). A extensão é essencial: muitos vídeos chegam sem mime (ou genérico)
+// e, sem isso, apareceriam como "documento".
+const MEDIA_EXT = {
+  image: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'heic', 'heif', 'avif'],
+  video: ['mp4', 'mov', 'webm', 'mkv', 'avi', '3gp', 'm4v', 'ogv', 'mpeg', 'mpg'],
+  audio: ['mp3', 'm4a', 'aac', 'ogg', 'oga', 'wav', 'opus', 'amr', 'flac', 'weba'],
+};
+function mediaTypeFor(mime, name) {
   const m = String(mime || '').toLowerCase();
   if (m.startsWith('image/')) return 'image';
   if (m.startsWith('video/')) return 'video';
   if (m.startsWith('audio/')) return 'audio';
-  // Some containers are misidentified by browsers; extend by extension too.
-  const ext = m.split('/')[1] || '';
-  if (['mp3','aac','flac','wav','ogg','opus','m4a','wma','aiff','ape','alac','amr','ra'].includes(ext)) return 'audio';
-  if (['mp4','mkv','avi','mov','webm','wmv','flv','m4v','ts'].includes(ext)) return 'video';
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  for (const t of ['image', 'video', 'audio']) if (MEDIA_EXT[t].includes(ext)) return t;
   return 'file';
 }
 
-// ── File-type icon map ────────────────────────────────────────────────────────
-const FILE_ICONS = {
-  pdf: '📕', doc: '📘', docx: '📘', xls: '📗', xlsx: '📗',
-  ppt: '📙', pptx: '📙', txt: '📄', md: '📄', csv: '📊',
-  zip: '🗜️', rar: '🗜️', '7z': '🗜️', tar: '🗜️', gz: '🗜️',
-  mp3: '🎵', flac: '🎵', wav: '🎵', aac: '🎵', ogg: '🎵',
-  opus: '🎵', m4a: '🎵', wma: '🎵', aiff: '🎵', amr: '🎵',
-  mp4: '🎬', mkv: '🎬', avi: '🎬', mov: '🎬',
-};
-function fileIcon(name, mime) {
-  const ext = (name || '').split('.').pop().toLowerCase();
-  return FILE_ICONS[ext] || (String(mime || '').startsWith('image/') ? '🖼️' : '📎');
-}
-
-function detectMediaType(file, mime, forcedType) {
-  if (forcedType) return forcedType;
-  const byMime = mediaTypeFor(mime || file?.type || '');
-  if (byMime !== 'file') return byMime;
-  const ext = (file?.name || '').split('.').pop().toLowerCase();
-  return ext ? mediaTypeFor(`/${ext}`) : 'file';
-}
-
-function mediaKindLabel(type, file) {
-  const finalType = detectMediaType(file, file?.type, type);
-  if (finalType === 'audio') return 'Áudio';
-  if (finalType === 'video') return 'Vídeo';
-  if (finalType === 'image') return 'Imagem';
-  return 'Arquivo';
-}
-
-function isUploadValidationError(err) {
-  return [400, 413, 415].includes(Number(err && err.status));
-}
-
-function isNetworkUploadError(err) {
-  if (!err) return false;
-  if (err.network || err.name === 'AbortError') return true;
-  if (err.status) return false;
-  return /network|rede|failed to fetch|load failed|internet|offline|conex/i.test(String(err.message || ''));
-}
-
-function uploadErrorMessage(err, type, file) {
-  const status = Number(err && err.status);
-  const kind = mediaKindLabel(type, file);
-  if (status === 413) return `${kind} muito pesado`;
-  if (status === 415) return 'Formato não aceito';
-  if (status === 400) return 'Arquivo inválido';
-  if (status === 401 || status === 403) return 'Sessão expirada. Entre novamente.';
-  if (status === 429) return 'Muitas tentativas. Tente novamente em instantes.';
-  if (status >= 500) return 'Erro no servidor. Tente novamente.';
-  if (isNetworkUploadError(err)) return 'Sem conexão';
-  return (err && err.message) || 'Falha no upload';
-}
-
-async function queueUploadedMedia(up, file, type, mediaName, enc) {
-  const finalType = detectMediaType(file, enc ? enc.mime : up.mime, type);
-  const payload = {
-    chatId: state.activeChatId,
-    type: finalType,
-    mediaUrl: up.url,
-    mediaName: mediaName || up.name || file.name,
-    // Guarda o mime ORIGINAL (o upload cifrado é octet-stream) para o blob
-    // decifrado renderizar certo.
-    mediaMime: enc ? enc.mime : (up.mime || file.type || 'application/octet-stream'),
-    replyTo: state.replyTo ? state.replyTo.id : undefined,
-    ghostTtl: state.ghostModeActive ? 15 : undefined,
-  };
-
-  if (enc) {
-    const chat = state.chats.get(state.activeChatId);
-    const envelope = JSON.stringify({ v: 1, mk: enc.mk, iv: enc.iv, name: enc.name, mime: enc.mime, caption: '' });
-    let out;
-    try { out = await encryptOutgoing(chat, envelope); }
-    catch { toast('Falha ao cifrar a mídia; tente novamente.'); return; }
-    if (!out || !out.encrypted) { toast('Falha ao cifrar a mídia; tente novamente.'); return; }
-    payload.body = out.body;
-    payload.encrypted = true;
-    // Eco local do remetente: mostra o arquivo original (ele já o tem).
-    payload._localMediaUrl = URL.createObjectURL(file);
-    queueAndSend(payload, ''); // _plain='' evita tentar decifrar o próprio envio
+async function deliverMedia({ file, type, mediaName }) {
+  if (!state.activeChatId) return;
+  const online = state.socket && state.socket.connected;
+  if (online) {
+    const up = await api.upload(file);
+    const finalType = type || mediaTypeFor(up.mime || file.type, mediaName || up.name || file.name);
+    queueAndSend({
+      chatId: state.activeChatId,
+      type: finalType,
+      mediaUrl: up.url,
+      mediaName: mediaName || up.name,
+      mediaMime: up.mime,
+      mediaThumb: up.thumb || undefined,
+      replyTo: state.replyTo ? state.replyTo.id : undefined,
+    });
     return;
   }
-
-  queueAndSend(payload);
-}
-
-async function sendMediaViaMesh({ file, type, mediaName }) {
+  // Offline → mesh.
   if (!(state.mesh && state.mesh.enabled)) {
-    toast('Sem conexão. Envio offline disponível pela Rede Mesh.');
-    return false;
+    toast('Sem internet. Ative a Rede Mesh (⚙️) para enviar mídia offline.');
+    return;
   }
   const b64 = await fileToBase64(file);
   if (b64.length > 700000) {
-    toast('Mídia grande demais para a Rede Mesh. Tente um áudio curto ou foto menor.');
-    return false;
+    toast('Mídia grande demais para a rede mesh. Tente um áudio curto ou foto menor.');
+    return;
   }
   const chat = state.chats.get(state.activeChatId);
-  if (!chat) return false;
+  if (!chat) return;
   const mime = file.type || 'application/octet-stream';
-  const finalType = detectMediaType(file, mime, type);
+  const finalType = type || mediaTypeFor(mime, mediaName || file.name);
   // Show it locally right away with a data: URL.
   const msg = optimisticMessage({
     clientId: newClientId(), chatId: chat.id, type: finalType,
@@ -2823,241 +1745,35 @@ async function sendMediaViaMesh({ file, type, mediaName }) {
     for (const m of chat.members) if (m.id !== state.me.id) state.mesh.sendMedia(m.id, meta);
   }
   toast('Enviando pela Rede Mesh…');
-  return true;
 }
 
-async function deliverMedia({ file, type, mediaName, onProgress } = {}) {
-  if (!state.activeChatId) return false;
-
-  const chat = state.chats.get(state.activeChatId);
-  // Arquivos grandes (>20 MB) vão em PEDAÇOS — furam o limite ~100 MB do
-  // Cloudflare e o nginx só precisa aceitar o tamanho do pedaço.
-  const isLarge = file.size > 20 * 1024 * 1024;
-
-  // E2EE de mídia (Lote 2): só p/ arquivos pequenos em chat direto — cifrar 1 GB
-  // de uma vez estouraria a memória do WebView. Mídia grande vai em pedaços SEM
-  // E2EE por ora (cifra em streaming fica pra depois).
-  let enc = null;
-  let uploadFile = file;
-  try {
-    if (!isLarge && state.e2eeReady && chat && chat.type === 'direct' && chat.otherUser) {
-      const key = await ensureChatKey(chat);
-      if (key) {
-        const r = await encryptFileBytes(file);
-        enc = { mk: r.mk, iv: r.iv, name: mediaName || file.name, mime: file.type || 'application/octet-stream' };
-        uploadFile = r.encFile;
-      }
-    }
-  } catch { enc = null; uploadFile = file; }
-
-  let uploadErr = null;
-  try {
-    const up = isLarge
-      ? await api.uploadChunked(file, onProgress)
-      : (onProgress ? await api.uploadWithProgress(uploadFile, onProgress) : await api.upload(uploadFile));
-    setServerReachable(true);
-    await queueUploadedMedia(up, file, type, mediaName, enc);
-    updateNetIndicator();
-    return true;
-  } catch (err) {
-    uploadErr = err;
-    if (isUploadValidationError(err) || (err && err.status)) {
-      toast(uploadErrorMessage(err, type, file));
-      return false;
-    }
-    if (!isNetworkUploadError(err)) {
-      toast(uploadErrorMessage(err, type, file));
-      return false;
-    }
-  }
-
-  const reachable = await hasInternetConnection({ force: true, timeoutMs: 2500 });
-  if (reachable) {
-    toast('Falha no upload. Tente novamente.');
-    return false;
-  }
-  if (uploadErr) setServerReachable(false);
-  return sendMediaViaMesh({ file, type, mediaName });
-}
-
-// ── Single-file send (legacy voice-recording path) ───────────────────────────
 async function sendFile(file) {
   if (!file || !state.activeChatId) return;
   try {
-    const ok = await deliverMedia({ file });
-    if (ok) clearReply();
-  } catch (err) { toast('Falha no envio: ' + uploadErrorMessage(err, undefined, file)); }
-}
-
-// ── Multi-file send — up to 500 files, with per-batch progress toast ──────────
-async function sendFiles(fileList) {
-  if (!fileList || fileList.length === 0 || !state.activeChatId) return;
-  const files = Array.from(fileList);
-
-  // Validate total count.
-  if (files.length > 500) return toast('Máximo de 500 arquivos por vez');
-
-  // Warn about large files (>1 GB each).
-  const tooBig = files.filter(f => f.size > 1073741824);
-  if (tooBig.length) return toast(`${tooBig.length} arquivo(s) excedem 1 GB e foram ignorados`);
-
-  // Show a progress toast that we'll update.
-  const tEl = el('div', { class: 'toast upload-progress-toast' });
-  const bar = el('div', { class: 'upload-progress-bar' });
-  const label = el('span', {}, `Enviando 0/${files.length}…`);
-  tEl.append(label, bar);
-  document.body.append(tEl);
-  requestAnimationFrame(() => tEl.classList.add('show'));
-
-  let sent = 0;
-
-  for (const file of files) {
-    try {
-      const ok = await deliverMedia({ file, onProgress: (pct) => {
-        bar.style.width = `${pct}%`;
-      } });
-      if (ok) {
-        sent++;
-        label.textContent = `Enviando ${sent}/${files.length}…`;
-        bar.style.width = `${Math.round((sent / files.length) * 100)}%`;
-      }
-    } catch (err) {
-      toast(`Falha: ${file.name} — ${uploadErrorMessage(err, undefined, file)}`);
-    }
-  }
-
-  // Dismiss progress toast.
-  tEl.classList.remove('show');
-  setTimeout(() => tEl.remove(), 400);
-  if (sent) {
-    toast(`✅ ${sent} arquivo(s) enviado(s)`);
+    // Deixa o tipo (foto / vídeo / áudio / arquivo) ser detectado pelo mime.
+    await deliverMedia({ file });
     clearReply();
-  }
+  } catch (err) { toast('Falha no envio: ' + err.message); }
 }
 
 // ------------------------------------------------------------------ composer
 let typingTimer = null;
-let composerPreviewTimer = null;
-let composerPreviewUrl = null;
-
-function showComposerPreview(d, url) {
-  const wrap = $('#composer-link-preview');
-  if (!wrap || !d || (!d.title && !d.image)) { hideComposerPreview(); return; }
-  composerPreviewUrl = url;
-  const img = $('#composer-preview-img');
-  if (d.image) { img.src = d.image; img.style.display = 'block'; }
-  else img.style.display = 'none';
-  $('#composer-preview-site').textContent = d.site || '';
-  $('#composer-preview-title').textContent = d.title || '';
-  $('#composer-preview-desc').textContent = d.description || '';
-  wrap.style.display = 'flex';
-}
-
-function hideComposerPreview() {
-  const wrap = $('#composer-link-preview');
-  if (wrap) wrap.style.display = 'none';
-  composerPreviewUrl = null;
-}
-
 function setupComposer() {
-  const composer = $('#composer');
   const input = $('#message-input');
-  $('#composer-preview-close').onclick = () => {
-    hideComposerPreview();
-    composerPreviewTimer = null;
-  };
-
-  let lastSendRequestAt = 0;
-  function requestComposerSend(event, isFromEnter = false) {
-    if (event) {
-      if (event.cancelable) event.preventDefault();
-      event.stopPropagation();
-    }
-    const nowTs = Date.now();
-    if (nowTs - lastSendRequestAt < 220) return;
-    lastSendRequestAt = nowTs;
-    sendTextMessageFromComposer(isFromEnter);
-  }
-
-  function resizeComposerInput() {
+  input.addEventListener('input', () => {
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
-  }
-
-  const isLineBreakInput = (event) =>
-    event && (event.inputType === 'insertLineBreak' || event.inputType === 'insertParagraph');
-
-  let isComposing = false;
-  let allowNextLineBreak = false;
-  let allowedLineBreakInserted = false;
-
-  input.addEventListener('input', (event) => {
-    if (isLineBreakInput(event) && !allowedLineBreakInserted && !isComposing) {
-      input.value = input.value.replace(/\n+$/g, '');
-      resizeComposerInput();
-      requestComposerSend(null, true);
-      return;
-    }
-    if (allowedLineBreakInserted) allowedLineBreakInserted = false;
-    resizeComposerInput();
     updateMentionSuggest();
     if (!state.activeChatId) return;
     state.socket.emit('typing', { chatId: state.activeChatId, isTyping: true });
     clearTimeout(typingTimer);
     typingTimer = setTimeout(
       () => state.socket.emit('typing', { chatId: state.activeChatId, isTyping: false }), 1800);
-    // Live link preview debounce (600ms)
-    clearTimeout(composerPreviewTimer);
-    composerPreviewTimer = setTimeout(async () => {
-      const url = firstUrl(input.value);
-      if (!url || url === composerPreviewUrl) return;
-      try {
-        const d = await api.linkPreview(url);
-        if (d && (d.title || d.image)) showComposerPreview(d, url);
-      } catch { /* ignore */ }
-    }, 600);
-  });
-  input.addEventListener('compositionstart', () => {
-    isComposing = true;
-  });
-  input.addEventListener('compositionend', () => {
-    isComposing = false;
   });
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.keyCode === 13) {
-      if (isComposing || e.isComposing) return;
-      if (e.shiftKey) {
-        allowNextLineBreak = true;
-        setTimeout(() => { allowNextLineBreak = false; }, 120);
-        return;
-      }
-      requestComposerSend(e, true);
-    }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
   });
-  // Alguns teclados Android (Gboard com a tecla "Enviar") NÃO geram keydown
-  // Enter — disparam "insertLineBreak" ou "insertParagraph". Tratamos também.
-  input.addEventListener('beforeinput', (e) => {
-    if (isLineBreakInput(e)) {
-      if (allowNextLineBreak) {
-        allowNextLineBreak = false;
-        allowedLineBreakInserted = true;
-        return;
-      }
-      if (!isComposing && !e.isComposing) requestComposerSend(e, true);
-    }
-  });
-  const sendBtn = $('#send-btn');
-  composer.addEventListener('submit', (e) => requestComposerSend(e, false));
-  // Redundância deliberada para PWA/WebView: alguns aparelhos entregam pointer
-  // sem click, outros click sem pointer. A guarda acima impede envio duplo.
-  sendBtn.addEventListener('pointerup', (e) => {
-    if (e.pointerType === 'mouse' && e.button !== 0) return;
-    requestComposerSend(e, false);
-  });
-  sendBtn.addEventListener('touchend', (e) => requestComposerSend(e, false), { passive: false });
-  sendBtn.addEventListener('click', (e) => {
-    requestComposerSend(e, false);
-  });
+  $('#send-btn').onclick = sendMessage;
   $('#reply-cancel').onclick = () => {
     if (state.editing) { $('#message-input').value = ''; $('#message-input').style.height = 'auto'; }
     clearReply();
@@ -3075,25 +1791,12 @@ function setupComposer() {
   $('#attach-btn').onclick = (e) => {
     document.querySelector('.popup-menu')?.remove();
     const menu = el('div', { class: 'popup-menu' });
-    const item = (iconName, label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
+    const item = (label, fn) => el('div', { class: 'popup-item', onclick: (ev) => {
       ev.stopPropagation(); menu.remove(); fn();
-    } }, icon(iconName, { size: 18 }), el('span', {}, label));
-    menu.append(item('paperclip', 'Foto ou arquivo', () => $('#file-input').click()));
-    menu.append(item('map-pin', 'Localização', () => sendLocationMessage()));
-    menu.append(item('user', 'Contato', () => shareContactModal()));
-    menu.append(item('calendar', 'Evento', () => eventComposeModal()));
-    menu.append(item('key', 'Pix', () => pixComposeModal()));
-    menu.append(item('chart', 'Enquete', () => pollComposeModal()));
-    menu.append(item('clock', 'Agendar mensagem', () => scheduleCurrentMessage()));
-    menu.append(item('calendar', 'Mensagens agendadas', () => showScheduledMessagesModal()));
-
-    const ghostLabel = state.ghostModeActive ? 'Desativar Modo Fantasma' : 'Ativar Modo Fantasma';
-    menu.append(item('ghost', ghostLabel, () => {
-      state.ghostModeActive = !state.ghostModeActive;
-      updateComposerPlaceholder();
-      toast(state.ghostModeActive ? '👻 Modo Fantasma Ativado! (mensagem some em 15s após visualizada)' : '👻 Modo Fantasma Desativado');
-    }));
-
+    } }, label);
+    menu.append(item('📎 Foto ou arquivo', () => $('#file-input').click()));
+    menu.append(item('📊 Enquete', () => pollComposeModal()));
+    menu.append(item('🕒 Agendar mensagem', () => scheduleCurrentMessage()));
     document.body.append(menu);
     const r = e.currentTarget.getBoundingClientRect();
     menu.style.left = `${Math.min(r.left, window.innerWidth - 200)}px`;
@@ -3101,14 +1804,7 @@ function setupComposer() {
     const close = (ev) => { if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', close); } };
     setTimeout(() => document.addEventListener('click', close), 0);
   };
-
-  $('#file-input').onchange = (e) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    if (files.length === 1) sendFile(files[0]); // keep single-file fast path
-    else sendFiles(files);
-    e.target.value = '';
-  };
+  $('#file-input').onchange = (e) => { if (e.target.files[0]) sendFile(e.target.files[0]); e.target.value = ''; };
   $('#back-btn').onclick = () => {
     state.activeChatId = null;
     $('#app').classList.remove('in-chat');
@@ -3125,7 +1821,6 @@ function setupComposer() {
   $('#chat-header-info').onclick = showChatInfo;
   $('#call-audio-btn').onclick = () => startCall('audio');
   $('#call-video-btn').onclick = () => startCall('video');
-  $('#tasks-btn').onclick = showTasksModal;
   $('#mic-btn').onclick = toggleVoiceRecording;
   $('#unblock-btn').onclick = async () => {
     const chat = state.chats.get(state.activeChatId);
@@ -3136,20 +1831,6 @@ function setupComposer() {
     updateComposerState(updated);
     toast('Contato desbloqueado');
   };
-}
-
-function updateComposerPlaceholder() {
-  const input = $('#message-input');
-  if (!input) return;
-  if (state.ghostModeActive) {
-    input.placeholder = '👻 Mensagem Fantasma (some em 15s)...';
-    input.style.border = '1px dashed var(--accent)';
-    input.style.boxShadow = '0 0 8px rgba(138, 43, 226, 0.4)';
-  } else {
-    input.placeholder = 'Mensagem';
-    input.style.border = '';
-    input.style.boxShadow = '';
-  }
 }
 
 // ------------------------------------------------------------------ voice messages
@@ -3515,11 +2196,9 @@ function makeAvatarUploadable(node, name, onUploaded) {
     if (!file) return;
     try {
       const up = await api.upload(file);
-      setServerReachable(true);
-      updateNetIndicator();
       avatarBg(node, up.url, name);
       onUploaded(up.url);
-    } catch (err) { toast(uploadErrorMessage(err, 'image', file)); }
+    } catch (err) { toast('Falha ao enviar imagem: ' + err.message); }
   };
   node.onclick = () => input.click();
   node.append(input);
@@ -3593,12 +2272,6 @@ async function openAppLockSetup() {
     maxlength: '12', placeholder: 'Novo PIN (mín. 4 dígitos)', style: 'margin-bottom:10px' });
   const pin2 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
     maxlength: '12', placeholder: 'Repita o PIN', style: 'margin-bottom:10px' });
-
-  const panic1 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
-    maxlength: '12', placeholder: 'PIN de Pânico (opcional)', style: 'margin-bottom:10px' });
-  const panic2 = el('input', { class: 'select-input', type: 'password', inputmode: 'numeric',
-    maxlength: '12', placeholder: 'Repita o PIN de Pânico', style: 'margin-bottom:10px' });
-
   const bioAvail = await applock.biometricAvailable();
   const bioChk = el('input', { type: 'checkbox', checked: bioAvail ? '' : null });
   const bioRow = el('label', { style: 'display:flex;align-items:center;gap:8px;margin:4px 0 10px' },
@@ -3610,32 +2283,15 @@ async function openAppLockSetup() {
     el('p', { class: 'auth-hint', style: 'margin-top:0' },
       'Crie um PIN para abrir o SpeedVox. Ele fica guardado só no seu aparelho (em forma cifrada) — nem o servidor sabe seu PIN.'),
     pin1, pin2,
-    el('hr', { style: 'border:0;border-top:1px dashed var(--border);margin:12px 0' }),
-    el('p', { class: 'auth-hint', style: 'margin-top:0' },
-      'Opcional: Defina um PIN de Pânico. Se você for obrigado a abrir o app, digite este PIN para simular um cofre falso e apagar os chats reais.'),
-    panic1, panic2,
-    el('hr', { style: 'border:0;border-top:1px dashed var(--border);margin:12px 0' }),
     bioAvail ? bioRow : el('p', { class: 'auth-hint' }, 'Este aparelho não oferece digital pelo navegador; o bloqueio usará o PIN.'),
     err, save);
   const bd = modalShell('🔒 Bloqueio do app', body);
 
   save.onclick = async () => {
     const p = pin1.value.trim();
-    if (!/^\d{4,}$/.test(p)) { err.textContent = 'Use pelo menos 4 dígitos para o PIN (só números).'; return; }
+    if (!/^\d{4,}$/.test(p)) { err.textContent = 'Use pelo menos 4 dígitos (só números).'; return; }
     if (p !== pin2.value.trim()) { err.textContent = 'Os PINs não conferem.'; return; }
-
-    const panic = panic1.value.trim();
-    if (panic) {
-      if (!/^\d{4,}$/.test(panic)) { err.textContent = 'Use pelo menos 4 dígitos para o PIN de Pânico.'; return; }
-      if (panic === p) { err.textContent = 'O PIN de Pânico deve ser DIFERENTE do PIN normal.'; return; }
-      if (panic !== panic2.value.trim()) { err.textContent = 'Os PINs de pânico não conferem.'; return; }
-    }
-
     await applock.enable(p, { biometric: false });
-    if (panic) {
-      await applock.enablePanic(panic);
-    }
-
     if (bioAvail && bioChk.checked) {
       try { await applock.biometricRegister(); } catch { toast('Digital não registrada; vale o PIN.'); }
     }
@@ -3672,65 +2328,15 @@ function securitySection() {
       el('div', { class: 'field-label' }, `Bloqueio do app (PIN / digital): ${status}`),
       lockBtns),
     el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, 'Backup das conversas (criptografado)'),
+      el('div', { class: 'field-label' }, 'Backup das conversas'),
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => exportBackup() },
-        '💾 Fazer backup (com senha)')),
+        '💾 Fazer backup (exportar)')),
     el('p', { class: 'auth-hint', style: 'margin-top:0' },
-      'O backup baixa um arquivo protegido por senha (.speedvox). Sem a senha, o arquivo é ilegível — nem nós conseguimos abrir. Guarde a senha em lugar seguro.'));
+      'O backup baixa um arquivo com suas conversas abertas, pra você guardar onde quiser.'));
 }
 
 // Exporta as conversas carregadas num arquivo (backup local).
-// Base64 seguro para arrays grandes (evita estourar a pilha do String.fromCharCode).
-function bytesToB64(u8) {
-  let s = '';
-  const CH = 0x8000;
-  for (let i = 0; i < u8.length; i += CH) s += String.fromCharCode.apply(null, u8.subarray(i, i + CH));
-  return btoa(s);
-}
-
-// Cifra o backup com uma senha do usuário (PBKDF2 + AES-GCM). Sem a senha o
-// arquivo é ilegível — nem o servidor, nem nós conseguimos abrir.
-async function encryptBackupBlob(jsonStr, password) {
-  const enc = new TextEncoder();
-  const salt = crypto.getRandomValues(new Uint8Array(16));
-  const iv = crypto.getRandomValues(new Uint8Array(12));
-  const iters = 210000;
-  const baseKey = await crypto.subtle.importKey('raw', enc.encode(password), 'PBKDF2', false, ['deriveKey']);
-  const key = await crypto.subtle.deriveKey(
-    { name: 'PBKDF2', salt, iterations: iters, hash: 'SHA-256' },
-    baseKey, { name: 'AES-GCM', length: 256 }, false, ['encrypt']);
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(jsonStr)));
-  return JSON.stringify({
-    app: 'SpeedVox', format: 'speedvox-encrypted-backup', v: 1,
-    kdf: { name: 'PBKDF2', hash: 'SHA-256', iters, salt: bytesToB64(salt) },
-    iv: bytesToB64(iv), ct: bytesToB64(ct),
-  });
-}
-
-// Pequeno modal de senha; resolve com a senha (>=6) ou null se cancelar.
-function askPassword(title, hint) {
-  return new Promise((resolve) => {
-    const input = el('input', { type: 'password', placeholder: 'Senha do backup', style: 'width:100%' });
-    const confirm = el('button', { class: 'btn-primary', style: 'margin-top:12px' }, 'Confirmar');
-    const body = el('div', { class: 'modal-body' },
-      el('h3', { style: 'margin-top:0' }, title),
-      el('p', { class: 'auth-hint', style: 'margin-top:0' }, hint),
-      input, confirm);
-    const backdrop = modalShell('Backup seguro', body);
-    let done = false;
-    confirm.onclick = () => {
-      const v = input.value;
-      if (!v || v.length < 6) { toast('Use uma senha de ao menos 6 caracteres'); return; }
-      done = true; backdrop.remove(); resolve(v);
-    };
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirm.click(); });
-    const origRemove = backdrop.remove.bind(backdrop);
-    backdrop.remove = () => { origRemove(); if (!done) resolve(null); };
-    setTimeout(() => input.focus(), 60);
-  });
-}
-
-async function exportBackup() {
+function exportBackup() {
   try {
     const data = { app: 'SpeedVox', exportadoEm: new Date().toISOString(),
       usuario: state.me ? state.me.displayName : '', conversas: [] };
@@ -3747,21 +2353,53 @@ async function exportBackup() {
       });
       if (msgs.length) data.conversas.push({ nome, tipo: chat.type, mensagens: msgs });
     }
-
-    // Backup agora é SEMPRE criptografado com senha (fecha o vazamento de
-    // conversas em texto puro no arquivo exportado).
-    const pass = await askPassword('Proteger o backup',
-      'Escolha uma senha. Você vai precisar dela pra restaurar. Sem a senha o arquivo é ilegível — nem nós conseguimos abrir.');
-    if (!pass) return;
-
-    const encrypted = await encryptBackupBlob(JSON.stringify(data), pass);
-    const blob = new Blob([encrypted], { type: 'application/octet-stream' });
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = el('a', { href: url, download: `speedvox-backup-${new Date().toISOString().slice(0, 10)}.speedvox` });
+    const a = el('a', { href: url, download: `speedvox-backup-${new Date().toISOString().slice(0, 10)}.json` });
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
-    toast(`Backup criptografado ✅ (${data.conversas.length} conversa(s))`);
+    toast(`Backup gerado ✅ (${data.conversas.length} conversa(s))`);
   } catch (e) { toast('Falha ao gerar backup'); }
+}
+
+// Shows whether THIS device registered its notification code on the server —
+// the thing that makes a call ring with the app closed — and lets the user
+// re-run the registration and watch the result live.
+function callPushSection() {
+  const line = el('div', { class: 'field-label' });
+  const detail = el('p', { class: 'auth-hint', style: 'margin:4px 0 0' });
+  const btn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' }, '📞 Ativar / Testar');
+
+  const render = (s) => {
+    if (!s) {
+      line.textContent = '❔ Ainda não verificado neste aparelho';
+      detail.textContent = 'Toque em "Ativar / Testar" para registrar este aparelho.';
+      return;
+    }
+    line.textContent = (s.ok ? '✅ Ativado' : '⚠️ Não ativado')
+      + (s.tokenTail ? ` · código …${s.tokenTail}` : '');
+    detail.textContent = s.message + (s.at ? ` · verificado às ${fmtTime(s.at)}` : '');
+  };
+
+  btn.onclick = async () => {
+    btn.disabled = true;
+    const label = btn.textContent;
+    btn.textContent = 'Verificando…';
+    line.textContent = '⏳ Registrando este aparelho…';
+    detail.textContent = '';
+    const s = await setupNativeCallPush();
+    render(s);
+    btn.disabled = false;
+    btn.textContent = label;
+    toast(s && s.ok ? 'Chamada com app fechado ativada' : 'Não deu para ativar — veja o motivo acima');
+  };
+
+  render(fcmState());
+
+  return el('div', {},
+    el('h3', { class: 'settings-section' }, '📞 Chamada com o app fechado'),
+    el('div', { class: 'field-row' }, line, detail),
+    el('div', { class: 'field-row' }, btn));
 }
 
 function settingsModal() {
@@ -3797,81 +2435,6 @@ function settingsModal() {
   const testBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3)' }, '🔔 Testar toque');
   testBtn.onclick = () => { ringtone.startIncoming(); setTimeout(() => ringtone.stop(), 3500); };
 
-  // --- "chamada com app fechado" (FCM push) status indicator + Ativar/Testar ---
-  // Shows, live, whether this device is registered to receive full-screen calls
-  // while the app is closed, and lets the user re-run the registration on demand.
-  const FCM_STATUS_LABELS = {
-    ok:            { dot: '#22c55e', text: '✅ Registrado neste aparelho — chamadas chegam mesmo com o app fechado.' },
-    browser:       { dot: '#9ca3af', text: 'ℹ️ Você está no navegador. Instale o app (APK) para receber chamadas com o app fechado.' },
-    'no-auth':     { dot: '#f59e0b', text: '⚠️ Entre na sua conta para registrar este aparelho.' },
-    'empty-token': { dot: '#f59e0b', text: '⏳ O Google ainda não devolveu o código. Toque em "Ativar/Testar" de novo em instantes.' },
-    error:         { dot: '#ef4444', text: '❌ Não deu para registrar agora. Verifique a internet e tente novamente.' },
-    checking:      { dot: '#3b82f6', text: '⏳ Verificando…' },
-    unknown:       { dot: '#9ca3af', text: 'Toque em "Ativar/Testar" para verificar este aparelho.' },
-  };
-  const fcmDot = el('span', { style: 'display:inline-block;width:10px;height:10px;border-radius:50%;flex:0 0 auto' });
-  const fcmText = el('div', { class: 'field-label', style: 'flex:1;margin:0' });
-  const applyFcmStatus = (st) => {
-    const info = FCM_STATUS_LABELS[st && st.status] || FCM_STATUS_LABELS.unknown;
-    fcmDot.style.background = info.dot;
-    fcmText.textContent = info.text;
-  };
-  applyFcmStatus(lastFcmPushStatus);
-  const fcmTestBtn = el('button', { class: 'btn-primary', style: 'padding:8px 16px;margin:0' }, 'Ativar/Testar');
-  fcmTestBtn.onclick = async () => {
-    fcmTestBtn.disabled = true;
-    applyFcmStatus({ status: 'checking' });
-    try {
-      applyFcmStatus(await setupNativeCallPush());
-    } finally {
-      fcmTestBtn.disabled = false;
-    }
-  };
-  // Live updates: periodic auto-retries (focus/visibility/timers) broadcast the
-  // status too. The listener self-removes once this modal leaves the DOM.
-  const onFcmStatus = (e) => {
-    if (!fcmText.isConnected) { window.removeEventListener('speedvox:fcm-status', onFcmStatus); return; }
-    applyFcmStatus(e.detail);
-  };
-  window.addEventListener('speedvox:fcm-status', onFcmStatus);
-  // Kick a silent refresh on open; the result arrives via the event above.
-  setupNativeCallPush().catch(() => {});
-
-  // --- "Prontidão de chamada" estilo WhatsApp (só no app nativo) ---
-  // Mostra o que já está liberado neste aparelho para a chamada tocar como o
-  // WhatsApp e oferece o botão pra liberar o que falta (bateria / tela cheia).
-  const readinessBox = el('div', { style: 'display:flex;flex-direction:column;gap:8px' });
-  const renderReadiness = async () => {
-    const cap = window.Capacitor || null;
-    const plugin = cap && cap.Plugins ? cap.Plugins.SpeedvoxCall : null;
-    readinessBox.textContent = '';
-    if (!plugin || !plugin.getCallReadiness) {
-      readinessBox.append(el('p', { class: 'auth-hint', style: 'margin:0' },
-        'ℹ️ Abra pelo app (APK) para ver e liberar tudo que faz a chamada tocar como no WhatsApp. No navegador isso não se aplica.'));
-      return;
-    }
-    let r = {};
-    try { r = await plugin.getCallReadiness(); } catch {}
-    const line = (ok, label, fixLabel, fixFn) => {
-      const row = el('div', { style: 'display:flex;align-items:center;gap:8px' },
-        el('span', { style: 'flex:0 0 auto' }, ok ? '✅' : '⚠️'),
-        el('div', { class: 'field-label', style: 'flex:1;margin:0' }, label));
-      if (!ok && fixFn) {
-        const b = el('button', { class: 'btn-primary', style: 'padding:6px 12px;margin:0' }, fixLabel);
-        b.onclick = async () => { try { await fixFn(); } catch {} setTimeout(renderReadiness, 1500); };
-        row.append(b);
-      }
-      return row;
-    };
-    readinessBox.append(
-      line(r.notifications, 'Notificações permitidas', null, null),
-      line(r.overlay, 'Abrir a tela de chamada por cima (aparecer sobre apps)', 'Liberar', () => plugin.requestOverlayPermission && plugin.requestOverlayPermission()),
-      line(r.fullScreen, 'Abrir em tela cheia (Android 14+)', 'Liberar', () => plugin.openFullScreenIntentSettings()),
-      line(r.battery, 'Não congelar no modo economia de bateria', 'Liberar', () => plugin.requestBatteryOptimizationExemption()),
-    );
-  };
-  renderReadiness();
-
   // --- mesh status line + toggle (make the mesh feature explicit) ---
   const peers = state.mesh ? state.mesh.status().peers : 0;
   const meshState = !state.mesh ? 'indisponível neste aparelho'
@@ -3886,30 +2449,13 @@ function settingsModal() {
       el('div', { class: 'field-label' }, 'Vibrar ao receber chamada'),
       boolRow('speedvox_vibrate', 'Ativado', 'Desativado')),
     el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, '📳 Vibração nos toques (haptics)'),
-      boolRow('speedvox_haptics', 'Ativado', 'Desativado')),
-    el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Som ao chegar mensagem (app aberto)'),
       boolRow('speedvox_msg_sound', 'Ativado', 'Desativado')),
-    el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, '🎙️ Limpeza de Ruído no Microfone (Web Audio)'),
-      boolRow('speedvox_noise_suppression', 'Ativado', 'Desativado')),
-    el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, '🎧 Qualidade de Áudio Estúdio (Opus Lossless)'),
-      boolRow('speedvox_studio_audio', 'Ativado', 'Desativado')),
     el('div', { class: 'field-row' }, testBtn),
-    el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, '📞 Chamada com o app fechado (este aparelho)'),
-      fcmTestBtn),
-    el('div', { class: 'field-row', style: 'display:flex;align-items:center;gap:10px' },
-      fcmDot, fcmText),
     el('p', { class: 'auth-hint' },
       'Mesmo com o app fechado, chamadas e mensagens chegam como notificação no celular (com som e vibração do sistema). Você fica conectado até tocar em Sair.'),
 
-    el('h3', { class: 'settings-section' }, '📞 Prontidão de chamada (estilo WhatsApp)'),
-    el('p', { class: 'auth-hint', style: 'margin-top:0' },
-      'Para a chamada tocar com o app no bolso — tela de bloqueio, vibração e som como uma ligação de verdade — o Android precisa liberar estes itens neste aparelho:'),
-    readinessBox,
+    callPushSection(),
 
     securitySection(),
 
@@ -3934,14 +2480,6 @@ function settingsModal() {
 }
 
 function profileModal() {
-  const formatVirtualNumber = (num) => {
-    if (!num) return 'Não atribuído';
-    if (num.length === 11) {
-      return `+55 (${num.slice(0, 2)}) ${num.slice(2, 7)}-${num.slice(7)}`;
-    }
-    return num;
-  };
-
   const big = el('div', { class: 'profile-avatar-big' });
   avatarBg(big, state.me.avatarUrl, state.me.displayName);
   let pendingAvatar = null;
@@ -3965,9 +2503,6 @@ function profileModal() {
     el('div', { class: 'field-row' },
       el('div', { class: 'field-label' }, 'Usuário'),
       el('div', {}, '@' + state.me.username)),
-    el('div', { class: 'field-row' },
-      el('div', { class: 'field-label' }, 'Número Virtual'),
-      el('div', {}, formatVirtualNumber(state.me.virtualNumber))),
     el('div', { class: 'field-row' },
       el('button', { class: 'btn-primary', style: 'background:var(--panel-3)', onclick: () => { backdrop.remove(); openSavedMessages(); } }, '🔖 Mensagens salvas')),
     el('div', { class: 'field-row' },
@@ -4422,13 +2957,6 @@ function showChatInfo() {
       }) }, '＋ Salvar nos contatos');
   }
 
-  // Verificar identidade (número de segurança), estilo Signal — só chat direto.
-  let safetyBtn = '';
-  if (!isGroup && chat.otherUser) {
-    safetyBtn = el('button', { class: 'btn-primary', style: 'background:var(--panel-3);margin-top:10px',
-      onclick: () => openSafetyNumber(chat) }, '🔐 Número de segurança (verificar)');
-  }
-
   const body = el('div', { class: 'modal-body' },
     big,
     titleNode,
@@ -4438,7 +2966,6 @@ function showChatInfo() {
     members,
     addBtn,
     saveContactBtn,
-    safetyBtn,
     blockBtn,
     leave);
   const backdrop = modalShell(isGroup ? 'Dados do grupo' : 'Dados do contato', body);
@@ -4535,182 +3062,48 @@ async function openStatusPanel() {
   const backdrop = modalShell('Status', body);
 }
 
-function compressImage(file) {
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target.result;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-
-        const maxW = 1280;
-        if (width > maxW) {
-          height = Math.round((height * maxW) / width);
-          width = maxW;
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, width, height);
-
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const compressedFile = new File([blob], file.name.replace(/\.[^/.]+$/, ".webp"), {
-              type: 'image/webp',
-              lastModified: Date.now()
-            });
-            resolve(compressedFile);
-          } else {
-            resolve(file);
-          }
-        }, 'image/webp', 0.75);
-      };
-      img.onerror = () => resolve(file);
-    };
-    reader.onerror = () => resolve(file);
-  });
-}
-
-function checkVideoDuration(file) {
-  return new Promise((resolve) => {
-    const video = document.createElement('video');
-    video.preload = 'metadata';
-    video.src = URL.createObjectURL(file);
-    video.onloadedmetadata = () => {
-      URL.revokeObjectURL(video.src);
-      resolve(video.duration);
-    };
-    video.onerror = () => {
-      resolve(0);
-    };
-  });
-}
-
 function statusComposer() {
   let chosenColor = STATUS_COLORS[0];
-  let pendingMedia = null; // { url, type: 'image' | 'video' }
+  let pendingImage = null;
 
   const preview = el('div', { class: 'status-compose-preview', style: `background:${chosenColor}` });
   const textInput = el('textarea', { class: 'status-compose-text', placeholder: 'Digite um status', rows: '4' });
-  textInput.oninput = () => {
-    if (!pendingMedia) preview.textContent = textInput.value;
-  };
+  textInput.oninput = () => { preview.textContent = textInput.value; };
   preview.append(textInput);
 
   const swatches = el('div', { class: 'status-swatches' });
   for (const c of STATUS_COLORS) {
     swatches.append(el('button', { class: 'swatch', style: `background:${c}`,
-      onclick: () => {
-        chosenColor = c;
-        if (!pendingMedia) {
-          preview.style.background = c;
-        }
-      } }));
+      onclick: () => { chosenColor = c; preview.style.background = c; if (pendingImage) { pendingImage = null; preview.style.backgroundImage = 'none'; } } }));
   }
 
-  const fileInput = el('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp,video/mp4,video/webm', style: 'display:none' });
+  const fileInput = el('input', { type: 'file', accept: 'image/*', style: 'display:none' });
   fileInput.onchange = async () => {
     const f = fileInput.files[0];
-    fileInput.value = '';
     if (!f) return;
-
-    const isImage = f.type.startsWith('image/');
-    const isVideo = f.type.startsWith('video/');
-
-    if (!isImage && !isVideo) {
-      return toast('Formato não suportado. Escolha uma foto ou vídeo.');
-    }
-
-    if (isImage) {
-      if (f.size > 2 * 1024 * 1024) {
-        return toast('Imagem muito pesada. Use uma foto de até 2 MB.');
-      }
-    } else if (isVideo) {
-      if (f.size > 8 * 1024 * 1024) {
-        return toast('Vídeo muito pesado para Status. Use um vídeo de até 8 MB e 15 segundos.');
-      }
-      toast('Validando tempo do vídeo...');
-      const duration = await checkVideoDuration(f);
-      if (duration > 15.5) {
-        return toast('Vídeo muito longo. Use um vídeo de até 15 segundos.');
-      }
-    }
-
     try {
-      toast('Carregando arquivo...');
-      let fileToUpload = f;
-
-      if (isImage) {
-        toast('Redimensionando foto...');
-        fileToUpload = await compressImage(f);
-      }
-
-      const up = await api.upload(fileToUpload);
-      setServerReachable(true);
-      updateNetIndicator();
-      pendingMedia = { url: up.url, type: isImage ? 'image' : 'video' };
-
-      preview.style.background = '#000';
-      preview.style.backgroundImage = 'none';
-      preview.querySelectorAll('video').forEach(el => el.remove());
-
-      if (isImage) {
-        preview.style.backgroundImage = `url(${up.url})`;
-        preview.style.backgroundSize = 'cover';
-        preview.style.backgroundPosition = 'center';
-      } else {
-        const vidPreview = el('video', {
-          src: up.url,
-          autoplay: true,
-          loop: true,
-          muted: true,
-          style: 'width:100%;height:100%;object-fit:cover;position:absolute;inset:0;z-index:0'
-        });
-        preview.prepend(vidPreview);
-      }
-
+      const up = await api.upload(f);
+      pendingImage = up.url;
+      preview.style.backgroundImage = `url(${up.url})`;
+      preview.style.backgroundSize = 'cover';
+      preview.style.backgroundPosition = 'center';
       textInput.placeholder = 'Legenda (opcional)';
-      textInput.value = '';
-      textInput.style.position = 'relative';
-      textInput.style.zIndex = '1';
-      preview.textContent = '';
-      preview.append(textInput);
-      toast('Arquivo carregado com sucesso!');
-    } catch (err) {
-      toast(uploadErrorMessage(err, isVideo ? 'video' : 'image', f));
-    }
+    } catch (err) { toast('Falha no upload: ' + err.message); }
   };
 
-  const photoBtn = el('button', { class: 'icon-btn', title: 'Adicionar foto/vídeo', style: 'font-size:20px', onclick: () => fileInput.click() }, '📷');
+  const photoBtn = el('button', { class: 'icon-btn', title: 'Foto', style: 'font-size:20px', onclick: () => fileInput.click() }, '📷');
   const post = el('button', { class: 'btn-primary', onclick: async () => {
     try {
-      if (pendingMedia) {
-        await api.postStatus({
-          type: pendingMedia.type,
-          mediaUrl: pendingMedia.url,
-          body: textInput.value.trim() || undefined
-        });
+      if (pendingImage) {
+        await api.postStatus({ type: 'image', mediaUrl: pendingImage, body: textInput.value.trim() || undefined });
       } else {
-        if (!textInput.value.trim()) return toast('Escreva algo ou escolha uma foto/vídeo');
-        await api.postStatus({
-          type: 'text',
-          body: textInput.value.trim(),
-          bgColor: chosenColor
-        });
+        if (!textInput.value.trim()) return toast('Escreva algo ou escolha uma foto');
+        await api.postStatus({ type: 'text', body: textInput.value.trim(), bgColor: chosenColor });
       }
       backdrop.remove();
       toast('Status publicado');
       refreshStatusIndicator();
-      if (state.chatFolder === 'status') renderStatusList();
-    } catch (err) {
-      toast('Falha ao publicar: ' + err.message);
-    }
+    } catch (err) { toast('Falha: ' + err.message); }
   } }, 'Publicar');
 
   const body = el('div', { class: 'modal-body' }, preview,
@@ -4746,13 +3139,7 @@ function viewStatuses(statuses, user, isMine) {
   overlay.append(bars, head, content, footer);
   document.body.append(overlay);
 
-  function close() {
-    if (timer) clearTimeout(timer);
-    overlay.remove();
-    refreshStatusIndicator();
-    if (state.chatFolder === 'status') renderStatusList();
-    else openStatusPanel();
-  }
+  function close() { if (timer) clearTimeout(timer); overlay.remove(); refreshStatusIndicator(); openStatusPanel(); }
 
   function render() {
     const s = statuses[idx];
@@ -4764,18 +3151,6 @@ function viewStatuses(statuses, user, isMine) {
     if (s.type === 'image' && s.mediaUrl) {
       content.style.background = '#000';
       content.append(el('img', { class: 'status-img', src: mediaUrl(s.mediaUrl) }));
-      if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
-    } else if (s.type === 'video' && s.mediaUrl) {
-      content.style.background = '#000';
-      const videoEl = el('video', {
-        class: 'status-img',
-        src: mediaUrl(s.mediaUrl),
-        autoplay: true,
-        playsinline: true,
-        controls: false,
-        style: 'max-width:100%;max-height:100%;object-fit:contain;'
-      });
-      content.append(videoEl);
       if (s.body) content.append(el('div', { class: 'status-caption' }, s.body));
     } else {
       content.append(el('div', { class: 'status-text' }, s.body || ''));
@@ -4824,57 +3199,19 @@ function refreshMyAvatar() {
   avatarBg($('#my-avatar-btn'), state.me.avatarUrl, state.me.displayName);
 }
 
-let lastNetMode = null;
-let lastMeshFallbackState = null;
-
 function updateNetIndicator() {
   const ind = $('#net-indicator');
-  if (!ind) return;
-
-  const isHealthy = cachedServerReachable();
-  const socketConnected = socketIsConnected();
-  const meshOn = Boolean(state.mesh && state.mesh.enabled && state.mesh.status().peers > 0);
-
-  let currentMode = 'offline';
-  let colorClass = 'offline';
-  let titleText = 'Reconectando…';
-
-  if (isHealthy) {
-    if (socketConnected) {
-      currentMode = 'internet';
-      colorClass = 'online';
-      titleText = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
-    } else {
-      currentMode = 'connecting';
-      colorClass = 'online';
-      titleText = 'Online · reconectando tempo real';
-    }
+  const meshOn = state.mesh && state.mesh.enabled && state.mesh.status().peers > 0;
+  if (state.socket && state.socket.connected) {
+    ind.className = 'net-indicator';
+    ind.title = meshOn ? `Online + ${state.mesh.status().peers} peers mesh` : 'Online';
+  } else if (meshOn) {
+    ind.className = 'net-indicator mesh';
+    ind.title = `Servidor offline · ${state.mesh.status().peers} peers via mesh`;
   } else {
-    if (meshOn) {
-      currentMode = 'mesh';
-      colorClass = 'connecting';
-      titleText = `Servidor offline · ${state.mesh.status().peers} peers via mesh`;
-    } else {
-      currentMode = 'offline';
-      colorClass = 'offline';
-      titleText = 'Sem conexão';
-    }
+    ind.className = 'net-indicator offline';
+    ind.title = 'Reconectando…';
   }
-
-  // Console logging transitions
-  if (currentMode !== lastNetMode) {
-    lastNetMode = currentMode;
-    console.log(`NET_MODE=${currentMode}`);
-  }
-
-  const currentMeshFallback = Boolean(!isHealthy && state.mesh && state.mesh.enabled);
-  if (currentMeshFallback !== lastMeshFallbackState) {
-    lastMeshFallbackState = currentMeshFallback;
-    console.log(currentMeshFallback ? 'MESH_FALLBACK_ENABLED' : 'MESH_FALLBACK_DISABLED');
-  }
-
-  ind.className = `net-indicator ${colorClass}`;
-  ind.title = titleText;
 }
 
 function logout() {
@@ -4942,7 +3279,7 @@ async function startApp(user) {
   }
 
   // Fetch ICE servers (STUN + optional TURN) so calls work behind restrictive NATs.
-  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'), { cache: 'no-store' })).json()).iceServers; } catch { state.iceServers = null; }
+  try { state.iceServers = (await (await fetch(apiUrl('/api/ice'))).json()).iceServers; } catch { state.iceServers = null; }
 
   connectSocket();
   setupMesh();
@@ -4955,18 +3292,6 @@ async function startApp(user) {
   setupComposer();
   await loadChats();
   updateNetIndicator();
-  hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
-
-  // Background monitoring every 5 seconds to guarantee recovery of connection status
-  setInterval(async () => {
-    const isHealthy = await hasInternetConnection({ force: true, timeoutMs: 2500 });
-    if (isHealthy) {
-      if (state.socket && !state.socket.connected) {
-        state.socket.connect();
-      }
-    }
-    updateNetIndicator();
-  }, 5000);
 
   $('#fab-new-chat').onclick = newChatModal;
   $('#contacts-btn').onclick = contactsModal;
@@ -4981,123 +3306,77 @@ async function startApp(user) {
   if (netDot) { netDot.style.cursor = 'pointer'; netDot.onclick = openOfflineMode; }
 
   setupPush();
-  setupNativeCallPush();
-  setTimeout(setupNativeCallPush, 3000);
-  setTimeout(setupNativeCallPush, 10000);
-  window.addEventListener('focus', () => setupNativeCallPush());
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') setupNativeCallPush();
-  });
-  setupAndroidBackButton();
+  setupNativeCallPush().catch(() => {});
   refreshStatusIndicator();
-}
-
-// Botão físico "voltar" do Android: em vez de SAIR do app, volta uma tela
-// (fecha popup -> fecha modal -> sai da conversa -> na raiz, minimiza). Sair do
-// app fica só para o botão "Sair". Requer o plugin @capacitor/app.
-let _androidBackBound = false;
-function setupAndroidBackButton() {
-  if (_androidBackBound) return;
-  const App = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
-  if (!App || !App.addListener) return; // só no app nativo
-  _androidBackBound = true;
-  App.addListener('backButton', () => {
-    // 1. Menu/popup aberto -> fecha.
-    const pop = document.querySelector('.popup-menu, .emoji-popup, .mention-suggest');
-    if (pop) { pop.remove(); return; }
-    // 2. Modal aberto -> fecha o mais recente.
-    const modals = document.querySelectorAll('.modal-backdrop');
-    if (modals.length) { modals[modals.length - 1].remove(); return; }
-    // 3. Em chamada -> não faz nada (evita encerrar sem querer).
-    if (document.querySelector('.call-overlay:not(.hidden), .gcall-overlay:not(.hidden)')) return;
-    // 4. Dentro de uma conversa -> volta para a lista.
-    if (state.activeChatId) {
-      state.activeChatId = null;
-      $('#app').classList.remove('in-chat');
-      $('#chat-view').classList.add('hidden');
-      $('#empty-state').classList.remove('hidden');
-      renderChatList();
-      return;
-    }
-    // 5. Na raiz -> MINIMIZA (nunca sai; sair só pelo botão "Sair").
-    try { App.minimizeApp(); } catch { /* ignore */ }
-  });
-}
-
-// Last known result of the native FCM registration so the Settings screen can
-// show — live — whether "chamada com app fechado" is armed on this device.
-// Possible status values: 'ok' | 'browser' | 'no-auth' | 'empty-token' | 'error'.
-let lastFcmPushStatus = { status: 'unknown', detail: null, at: 0 };
-
-// Store the latest FCM registration result and broadcast it so any open Settings
-// panel updates its indicator without polling. Returns the stored object so
-// setupNativeCallPush() callers can also read the outcome directly.
-function setFcmPushStatus(status, detail = null) {
-  lastFcmPushStatus = { status, detail, at: Date.now() };
-  try {
-    window.dispatchEvent(new CustomEvent('speedvox:fcm-status', { detail: lastFcmPushStatus }));
-  } catch {}
-  return lastFcmPushStatus;
 }
 
 // Native Android (Capacitor): register this device's FCM token so the server
 // can ring incoming calls in full screen even with the app closed.
-// Returns (and broadcasts) a { status, detail, at } result:
-//   ok          – token obtained and registered on the server
-//   browser     – no native call plugin (running in a plain browser/PWA)
-//   no-auth     – not signed in yet, so there is nothing to attach the token to
-//   empty-token – the plugin/Google returned no token (usually transient)
-//   error       – an exception was thrown while registering
+//
+// The outcome is persisted so Configurações can show, in plain language, why a
+// device isn't ringing while closed — the usual cause is an APK older than this
+// feature, which is invisible otherwise.
+const FCM_STATE_KEY = 'speedvox_fcm_state';
+
+function fcmState() {
+  try { return JSON.parse(localStorage.getItem(FCM_STATE_KEY)) || null; } catch { return null; }
+}
+
+function setFcmState(s) {
+  const saved = Object.assign({}, s, { at: Date.now() });
+  try { localStorage.setItem(FCM_STATE_KEY, JSON.stringify(saved)); } catch {}
+  return saved;
+}
+
+// Only the last characters of the token are ever kept/shown: enough to tell two
+// devices apart, useless to anyone who reads it.
+function tokenTail(token) {
+  return typeof token === 'string' && token.length > 6 ? token.slice(-6) : null;
+}
+
 async function setupNativeCallPush() {
   try {
-    const cap = window.Capacitor || null;
-    const plugins = cap && cap.Plugins ? cap.Plugins : {};
-    const plugin = plugins.SpeedvoxCall;
-
-    const nativeFlag = (() => {
-      try { return isNative(); } catch { return false; }
-    })();
-
-    console.log('FCM_REGISTER_START', {
-      nativeFlag,
-      hasCapacitor: Boolean(cap),
-      hasPlugins: Boolean(cap && cap.Plugins),
-      hasSpeedvoxCall: Boolean(plugin),
-      hasGetToken: Boolean(plugin && plugin.getToken),
-      hasAuthToken: Boolean(getToken && getToken()),
-    });
-
-    // Do not rely only on isNative(); some Capacitor builds report it differently.
-    // If the native plugin exists, try it.
+    if (!isNative()) {
+      return setFcmState({ ok: false, code: 'web',
+        message: 'Disponível apenas no aplicativo Android (APK). No navegador a chamada só toca com o app aberto.' });
+    }
+    const plugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.SpeedvoxCall;
     if (!plugin || !plugin.getToken) {
-      console.warn('FCM_REGISTER_NO_PLUGIN');
-      return setFcmPushStatus('browser');
+      return setFcmState({ ok: false, code: 'apk-antigo',
+        message: 'Este APK é anterior à chamada com o app fechado. Instale a versão mais nova do SpeedVox para ativar.' });
     }
 
-    if (!getToken || !getToken()) {
-      console.warn('FCM_REGISTER_NO_AUTH_TOKEN');
-      return setFcmPushStatus('no-auth');
+    let token = null;
+    try {
+      token = (await plugin.getToken()).token;
+    } catch (e) {
+      return setFcmState({ ok: false, code: 'sem-token',
+        message: 'O Android não entregou o código de notificação deste aparelho. Confira se as notificações do SpeedVox estão permitidas e se há internet, depois toque em Ativar/Testar de novo.',
+        detail: e && e.message });
     }
-
-    const result = await plugin.getToken();
-    const token = result && result.token;
-
-    console.log('FCM_REGISTER_TOKEN_RESULT', {
-      hasToken: Boolean(token),
-      tokenLength: token ? String(token).length : 0,
-    });
-
     if (!token) {
-      console.warn('FCM_REGISTER_EMPTY_TOKEN');
-      return setFcmPushStatus('empty-token');
+      return setFcmState({ ok: false, code: 'sem-token',
+        message: 'O Android não entregou o código de notificação deste aparelho. Confira se as notificações do SpeedVox estão permitidas e se há internet, depois toque em Ativar/Testar de novo.' });
     }
 
-    await api.registerFcm(token);
-    console.log('FCM_REGISTER_OK');
-    return setFcmPushStatus('ok', { tokenLength: String(token).length });
-  } catch (err) {
-    console.error('FCM_REGISTER_ERROR', err && (err.stack || err.message || err));
-    return setFcmPushStatus('error', { message: err && (err.message || String(err)) });
+    try {
+      await api.registerFcm(token);
+    } catch (e) {
+      const expirou = e && e.status === 401;
+      return setFcmState({ ok: false, code: 'servidor', tokenTail: tokenTail(token),
+        message: expirou
+          ? 'O aparelho gerou o código, mas a sessão expirou. Saia e entre de novo, depois toque em Ativar/Testar.'
+          : 'O aparelho gerou o código, mas o servidor não confirmou o registro. Verifique a internet e tente de novo.',
+        detail: e && e.message });
+    }
+
+    return setFcmState({ ok: true, code: 'ok', tokenTail: tokenTail(token),
+      message: 'Este aparelho está registrado: chamadas tocam mesmo com o app fechado.' });
+  } catch (e) {
+    // Never let the diagnostic itself break startup; calls still work in foreground.
+    return setFcmState({ ok: false, code: 'falha',
+      message: 'Não foi possível verificar a chamada com o app fechado neste aparelho.',
+      detail: e && e.message });
   }
 }
 
@@ -5129,56 +3408,10 @@ function setupInstallPrompt() {
   });
 }
 
-function initFakePanicVault() {
-  state.me = { id: 'panic-me', displayName: 'Jardel Cassimiro', username: 'jardel', avatarUrl: null };
-  const mockList = [
-    {
-      id: 'mock-1',
-      type: 'direct',
-      title: 'Mãe ❤️',
-      unread: 0,
-      avatarUrl: null,
-      lastMessage: { type: 'text', body: 'Oi filho, tudo bem? Me liga quando puder.', createdAt: Date.now() - 3600 * 1000 }
-    },
-    {
-      id: 'mock-2',
-      type: 'direct',
-      title: 'Amor 😍',
-      unread: 0,
-      avatarUrl: null,
-      lastMessage: { type: 'text', body: 'Estou comprando as coisas pro jantar!', createdAt: Date.now() - 7200 * 1000 }
-    },
-    {
-      id: 'mock-3',
-      type: 'group',
-      title: 'Trabalho (Projetos)',
-      unread: 0,
-      avatarUrl: null,
-      lastMessage: { type: 'text', body: 'Marcos: Relatório enviado para o cliente.', createdAt: Date.now() - 10000 * 1000 }
-    }
-  ];
-  state.chats.clear();
-  for (const c of mockList) {
-    state.chats.set(c.id, c);
-    state.messages.set(c.id, [
-      { id: `msg-${c.id}-1`, chatId: c.id, senderId: 'other', type: 'text', body: c.lastMessage.body, createdAt: c.lastMessage.createdAt }
-    ]);
-  }
-  $('#auth-screen').classList.add('hidden');
-  $('#app').classList.remove('hidden');
-  renderChatList();
-}
-
 async function boot() {
   // Bloqueio do app (PIN/digital) — se ativado, pede pra desbloquear antes
   // de mostrar qualquer coisa.
   await applock.guard();
-
-  if (localStorage.getItem('speedvox_panic_active') === '1') {
-    initFakePanicVault();
-    setupInstallPrompt();
-    return;
-  }
 
   setupAuthScreen();
   checkVerifiedParam();
@@ -5189,13 +3422,8 @@ async function boot() {
     history.replaceState(null, '', location.pathname);
   }
 
-  window.addEventListener('online', () => {
-    hasInternetConnection({ force: true, timeoutMs: 2500 }).catch(() => {});
-  });
-
-  window.addEventListener('offline', () => {
-    hasInternetConnection({ force: true, timeoutMs: 1500 }).catch(() => {});
-  });
+  window.addEventListener('online', () => { state.online = true; updateNetIndicator(); });
+  window.addEventListener('offline', () => { state.online = false; updateNetIndicator(); });
 
   // Unlock the audio engine on the first interaction so an incoming call rings
   // out loud (browsers keep audio suspended until the user touches the page).
@@ -5217,9 +3445,8 @@ async function boot() {
     // app is loaded from local assets in the native build).
     const gbtn = $('#google-btn');
     if (gbtn) gbtn.href = apiUrl('/api/auth/google');
-    const h = await fetchServerHealth();
-    setServerReachable(Boolean(h && h.ok));
-    updateNetIndicator();
+    const res = await fetch(apiUrl('/api/health'));
+    const h = await res.json();
     if (!h.google) {
       $('#google-btn').classList.add('hidden');
       $('#google-disabled').classList.remove('hidden');
@@ -5248,24 +3475,11 @@ async function boot() {
     }
   }
 
-  // Open the right chat or answer a call when a notification is tapped.
+  // Open the right chat when a notification is tapped.
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.addEventListener('message', (e) => {
       if (e.data && e.data.type === 'open-chat' && e.data.chatId && state.chats.has(e.data.chatId)) {
         openChat(e.data.chatId);
-      }
-      if (e.data && e.data.type === 'answer-call' && e.data.callId) {
-        state.pendingAnswerCallId = e.data.callId;
-        if (state.calls && state.calls.callId === e.data.callId && state.calls.role === 'callee') {
-          state.calls._accept();
-        }
-      }
-      if (e.data && e.data.type === 'decline-call' && e.data.callId) {
-        if (state.calls && state.calls.callId === e.data.callId && state.calls.role === 'callee') {
-          state.calls._reject();
-        } else {
-          state.pendingDeclineCallId = e.data.callId;
-        }
       }
     });
   }
@@ -5277,12 +3491,6 @@ async function boot() {
     }, 300);
     setTimeout(() => clearInterval(tryOpen), 6000);
   }
-  const actionParam = new URLSearchParams(location.search).get('action');
-  const callIdParam = new URLSearchParams(location.search).get('callId');
-  if (actionParam === 'answer' && callIdParam) {
-    history.replaceState(null, '', location.pathname);
-    state.pendingAnswerCallId = callIdParam;
-  }
   // Public invite deep link: ?u=username opens a chat with that person.
   const userParam = new URLSearchParams(location.search).get('u');
   if (userParam && getToken()) {
@@ -5293,7 +3501,7 @@ async function boot() {
   if ('serviceWorker' in navigator) {
     // Auto-update: when a new version is deployed, the new service worker takes
     // over and we reload once so the user always runs the latest app (fixes the
-    // "stale cached version" problem where new features didn't appear on mobile).
+    // "stale cached version" problem where new features didn't appear).
     const hadController = Boolean(navigator.serviceWorker.controller);
     let reloading = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
@@ -5301,244 +3509,11 @@ async function boot() {
       reloading = true;
       window.location.reload();
     });
-
-    function activateWaiting(reg) {
-      // Tell the waiting SW to skip waiting and activate immediately
-      // instead of waiting for all browser tabs to close (critical for mobile PWA).
-      if (reg.waiting) reg.waiting.postMessage({ type: 'SKIP_WAITING' });
-    }
-
     navigator.serviceWorker.register('/service-worker.js').then((reg) => {
-      activateWaiting(reg); // in case SW was already waiting at load
-      reg.addEventListener('updatefound', () => {
-        const incoming = reg.installing;
-        if (incoming) {
-          incoming.addEventListener('statechange', () => {
-            if (incoming.state === 'installed') activateWaiting(reg);
-          });
-        }
-      });
-      // Poll: on focus, on visibility restore (mobile minimise→return), and once at start.
+      // Check for a new version now and every time the app regains focus.
       reg.update().catch(() => {});
       window.addEventListener('focus', () => reg.update().catch(() => {}));
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') reg.update().catch(() => {});
-      });
     }).catch(() => {});
-  }
-}
-
-async function showTasksModal() {
-  const chat = state.chats.get(state.activeChatId);
-  if (!chat) return;
-
-  const content = el('div', { class: 'modal-body', style: 'max-height: 480px; overflow-y: auto;' });
-  const footer = el('div', { class: 'modal-footer', style: 'display:flex; gap:8px;' });
-
-  const renderTaskList = async () => {
-    content.innerHTML = '';
-    try {
-      const { tasks } = await api.listTasks(chat.id);
-      if (tasks.length === 0) {
-        content.append(el('p', { style: 'text-align:center; color:var(--text-2); padding:20px;' }, 'Nenhuma tarefa criada para este chat ainda.'));
-      } else {
-        const list = el('div', { style: 'display:flex; flex-direction:column; gap:10px;' });
-        for (const t of tasks) {
-          const assignee = chat.members ? chat.members.find((m) => m.id === t.assignee_id) : null;
-          const assigneeName = assignee ? assignee.displayName : 'Não atribuído';
-          
-          const checkbox = el('input', { type: 'checkbox', checked: t.completed ? '' : null, style: 'cursor:pointer; width:18px; height:18px;' });
-          checkbox.onchange = async () => {
-            await api.updateTask(chat.id, t.id, { completed: checkbox.checked });
-            toast(checkbox.checked ? 'Tarefa concluída! 🎉' : 'Tarefa reaberta');
-            renderTaskList();
-          };
-
-          const taskTitle = el('span', {
-            style: `font-size:15px; font-weight:500; cursor:pointer; flex:1; ${t.completed ? 'text-decoration:line-through; color:var(--text-2);' : ''}`
-          }, t.title);
-          
-          taskTitle.onclick = () => {
-            checkbox.checked = !checkbox.checked;
-            checkbox.dispatchEvent(new Event('change'));
-          };
-
-          const metaInfo = el('div', { style: 'font-size:12px; color:var(--text-2); margin-top:2px;' },
-            `Responsável: ${assigneeName}` + (t.due_date ? ` · Prazo: ${new Date(t.due_date).toLocaleDateString()}` : '')
-          );
-
-          const taskRow = el('div', {
-            style: 'display:flex; align-items:flex-start; gap:12px; padding:10px; border-radius:8px; background:var(--panel-3); border-left:4px solid ' + (t.completed ? 'var(--success)' : 'var(--accent)')
-          },
-            checkbox,
-            el('div', { style: 'flex:1; display:flex; flex-direction:column;' }, taskTitle, metaInfo)
-          );
-          list.append(taskRow);
-        }
-        content.append(list);
-      }
-    } catch (err) {
-      content.append(el('p', { class: 'auth-error' }, 'Erro ao carregar tarefas: ' + err.message));
-    }
-  };
-
-  const addBtn = el('button', { class: 'btn-primary', style: 'flex:1; margin:0;' }, '＋ Nova Tarefa');
-  addBtn.onclick = () => {
-    const titleInput = el('input', { class: 'select-input', type: 'text', placeholder: 'Título da tarefa', style: 'margin-bottom:10px' });
-    const assigneeSelect = el('select', { class: 'select-input', style: 'margin-bottom:10px' },
-      el('option', { value: '' }, 'Sem responsável'));
-    if (chat.members) {
-      for (const m of chat.members) {
-        assigneeSelect.append(el('option', { value: m.id }, m.displayName));
-      }
-    }
-    const dueDateInput = el('input', { class: 'select-input', type: 'date', style: 'margin-bottom:10px' });
-    const err = el('div', { class: 'auth-error' });
-    const save = el('button', { class: 'btn-primary', style: 'width:100%' }, 'Adicionar');
-
-    const body = el('div', { class: 'modal-body' }, titleInput, assigneeSelect, dueDateInput, err, save);
-    const addBd = modalShell('Nova Tarefa', body);
-
-    save.onclick = async () => {
-      const title = titleInput.value.trim();
-      if (!title) { err.textContent = 'O título é obrigatório.'; return; }
-      try {
-        await api.createTask(chat.id, {
-          title,
-          assigneeId: assigneeSelect.value || null,
-          dueDate: dueDateInput.value ? new Date(dueDateInput.value).getTime() : null
-        });
-        addBd.remove();
-        renderTaskList();
-      } catch (e) {
-        err.textContent = e.message;
-      }
-    };
-  };
-
-  footer.append(addBtn);
-  const bd = modalShell('📋 Tarefas Coletivas', content, footer);
-  await renderTaskList();
-}
-
-function createTaskFromMessage(m) {
-  const chat = state.chats.get(state.activeChatId);
-  if (!chat) return;
-
-  const titleInput = el('input', { class: 'select-input', type: 'text', value: m._plain || m.body || '', placeholder: 'Título da tarefa', style: 'margin-bottom:10px' });
-  
-  const assigneeSelect = el('select', { class: 'select-input', style: 'margin-bottom:10px' },
-    el('option', { value: '' }, 'Sem responsável (Não atribuído)'));
-  if (chat.members) {
-    for (const member of chat.members) {
-      assigneeSelect.append(el('option', { value: member.id }, member.displayName));
-    }
-  }
-
-  const dueDateInput = el('input', { class: 'select-input', type: 'date', style: 'margin-bottom:10px' });
-
-  const err = el('div', { class: 'auth-error' });
-  const save = el('button', { class: 'btn-primary', style: 'width:100%' }, '📋 Criar Tarefa');
-
-  const body = el('div', { class: 'modal-body' },
-    el('p', { class: 'auth-hint', style: 'margin-top:0' }, 'Transforme esta mensagem em uma tarefa colaborativa para o grupo.'),
-    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Título'),
-    titleInput,
-    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Responsável'),
-    assigneeSelect,
-    el('label', { style: 'font-weight:bold;font-size:12px;display:block;margin-bottom:4px;' }, 'Prazo de entrega'),
-    dueDateInput,
-    err, save);
-  const bd = modalShell('📋 Criar Tarefa', body);
-
-  save.onclick = async () => {
-    const title = titleInput.value.trim();
-    if (!title) { err.textContent = 'O título é obrigatório.'; return; }
-    
-    try {
-      const dueDateVal = dueDateInput.value ? new Date(dueDateInput.value).getTime() : null;
-      await api.createTask(chat.id, {
-        title,
-        messageId: m.id,
-        assigneeId: assigneeSelect.value || null,
-        dueDate: dueDateVal
-      });
-      bd.remove();
-      toast('Tarefa criada! ✅');
-    } catch (e) {
-      err.textContent = e.message || 'Falha ao criar tarefa';
-    }
-  };
-}
-
-async function renderStatusList() {
-  renderFolderTabs();
-  const list = $('#chat-list');
-  list.innerHTML = '';
-  
-  list.append(el('li', { style: 'text-align:center; padding:20px; color:var(--text-dim)' }, 'Carregando status...'));
-
-  try {
-    const feed = await api.statusFeed();
-    list.innerHTML = '';
-    
-    // 1. My status item
-    const myAvatar = el('span', { class: 'avatar' });
-    avatarBg(myAvatar, state.me.avatarUrl, state.me.displayName);
-    
-    const myItem = el('li', { class: 'chat-item' },
-      el('span', { class: `status-ring${feed.me.length ? ' seen' : ''}` }, myAvatar),
-      el('div', { class: 'chat-item-body' },
-        el('div', { class: 'chat-item-head' },
-          el('span', { class: 'chat-item-title' }, 'Meu Status'),
-          el('span', { class: 'chat-item-time' }, '')),
-        el('div', { class: 'chat-item-preview' },
-          feed.me.length ? `${feed.me.length} atualização(ões) · Toque para ver` : 'Clique para adicionar um status')),
-      el('button', {
-        class: 'icon-btn',
-        title: 'Adicionar status',
-        style: 'margin-left: 10px; font-size: 20px; background: none; border: none; cursor: pointer; color: var(--accent);',
-        onclick: (e) => { e.stopPropagation(); statusComposer(); }
-      }, '＋')
-    );
-    
-    myItem.onclick = () => {
-      if (feed.me.length) viewStatuses(feed.me, state.me, true);
-      else statusComposer();
-    };
-    list.append(myItem);
-    
-    // Divider
-    if (feed.contacts.length > 0) {
-      list.append(el('li', { class: 'day-divider', style: 'padding: 8px 12px; font-size: 12px; background: var(--panel-3); color: var(--text-dim);' }, 'Atualizações recentes'));
-    }
-
-    // 2. Contacts' status items
-    for (const g of feed.contacts) {
-      const contactAvatar = el('span', { class: 'avatar' });
-      avatarBg(contactAvatar, g.user.avatarUrl, g.user.displayName);
-      
-      const item = el('li', { class: 'chat-item' },
-        el('span', { class: `status-ring${g.hasUnviewed ? '' : ' seen'}` }, contactAvatar),
-        el('div', { class: 'chat-item-body' },
-          el('div', { class: 'chat-item-head' },
-            el('span', { class: 'chat-item-title' }, g.user.displayName),
-            el('span', { class: 'chat-item-time' }, fmtTime(g.latestAt))),
-          el('div', { class: 'chat-item-preview' }, `${g.statuses.length} atualização(ões)`))
-      );
-      
-      item.onclick = () => {
-        viewStatuses(g.statuses, g.user, false);
-      };
-      list.append(item);
-    }
-    
-    if (feed.contacts.length === 0) {
-      list.append(el('li', { style: 'text-align:center; padding:30px; color:var(--text-dim); font-size: 14px;' }, 'Nenhum status recente dos seus contatos.'));
-    }
-  } catch (e) {
-    list.innerHTML = '';
-    list.append(el('li', { style: 'text-align:center; padding:20px; color:var(--danger)' }, 'Falha ao carregar status: ' + e.message));
   }
 }
 
